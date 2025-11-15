@@ -2,3 +2,5 @@
 .godot/
 /android/
 Simulation/robomorph/target/
+
+Simulation/godot/addons/
