@@ -1,6 +1,9 @@
 # Redot 4+ specific ignores
 .godot/
 /android/
-Simulation/robomorph/target/
 
-Simulation/godot/addons/
+godot/flight_controller/target/
+
+companion/target/
+
+remote_controller/target/
