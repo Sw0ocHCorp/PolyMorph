@@ -1,6 +1,7 @@
 use std::{sync::{Arc, Mutex, atomic::AtomicBool}, thread::{self, JoinHandle, Thread}};
 
-use crate::{com_channels, events_management, flight_controller};
+use crate::{com_channels, events_management};
+
 
 
 pub struct ProcessConfig {

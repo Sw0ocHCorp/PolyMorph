@@ -1,21 +1,28 @@
-use std::{collections::VecDeque, sync::{Arc, Mutex}};
+use std::{collections::VecDeque, net::UdpSocket, sync::{Arc, Mutex, mpsc::{Receiver, Sender, channel}}, thread::{self, JoinHandle, Thread}, time::{Duration, Instant}};
 
 use godot::prelude::*;
 use godot::prelude::INode3D;
-use crate::{com_channels::{self, Message, UDPChannel}, events_management::{self, Observer}, process::{self, ProcessConfig, Worker}};
+use crate::{com_channels::{self, Message, UDPChannel}, events_management::{self, Event, Observer}, process::{self, ProcessConfig, Worker}};
 
 #[derive(GodotClass)]
 #[class(init, base=Node3D)]
+/*pub struct FlightController {
+    #[base]
+    base: Base<Node3D>,
+    tx: Arc<Mutex<Option<Sender<String>>>>,
+    rx: Arc<Mutex<Option<Receiver<String>>>>,
+}*/
 pub struct FlightController {
     #[base]
     base: Base<Node3D>,
-    udp_worker: Option<Arc<UDPChannel>>
+    udp: Option<Arc<UDPChannel>>,
 }
 #[godot_api]
+// /!\ WARNING: Using UDP WORKER sequentially. Not in a dedicated thread
+// /!\ Unable to maintain a dedicated thread for  GodotClass  
 impl INode3D for FlightController{
-    
+
     fn ready(&mut self) {
-        
         let udp_data_observer: events_management::Observer<Message>= events_management::Observer::new(Arc::new(Box::new(|x| {
             print!("Receive Message to Send through UDP");
         })));
@@ -30,8 +37,7 @@ impl INode3D for FlightController{
         //UDP event:
         //Were the received data is sent
         let udp_data_event: events_management::Event<Message>= events_management::Event::new(vec![incoming_data_observer]);
-        let mut udp_worker= Some(Arc::new(com_channels::UDPChannel::new( 
-                com_channels::ChannelConfig {
+        let mut udp= UDPChannel::new(com_channels::ChannelConfig {
                                 address: "127.0.0.1".to_string(),
                                 worker_config: process::WorkerConfig { 
                                     process_config: ProcessConfig {
@@ -43,18 +49,27 @@ impl INode3D for FlightController{
                                 }, 
                                 message_buffer: Mutex::new(VecDeque::new())
                             }, 
-                8080, "127.0.0.1".to_string(), 8090)));
-        if let Some(udp)= udp_worker.clone() {
-            udp.clone().start();
-        } 
+                8080, "127.0.0.1".to_string(), 8090);
+        //udp.clone().start_routine();
+        if self.udp.is_none() {
+            self.udp= Some(udp);
+        }
         godot_print!("Hello\n");
         //return FlightController {base};
     }
     
 
-    fn physics_process(&mut self, delta: f64) {
-        let a= 1;
-        //godot_print!("Hello from process ");
-        //self.base_mut().rotate(Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.15);
+    fn process(&mut self, delta: f64) {
+        if let Some(udp) = self.udp.clone() {
+            udp.clone().start_task();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    fn exit_tree(&mut self) {
+        if let Some(udp) = self.udp.clone() {
+            udp.clone().end();
+            //udp.
+        }
     }
 }

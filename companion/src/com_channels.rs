@@ -1,5 +1,3 @@
-use godot::global::godot_print;
-
 use crate::{process::{Worker, WorkerConfig}};
 use std::{collections::VecDeque, io::{self, ErrorKind}, sync::{Arc, Mutex}, thread::{self}};
 use std::net::UdpSocket;
@@ -34,9 +32,10 @@ pub struct UDPChannel {
     target_port: u32
 } 
 
+
 impl UDPChannel {
-    pub fn new(base_config: ChannelConfig, port: u32, target_address: String, target_port: u32) -> Arc<Self> {
-        return Arc::new(UDPChannel {base_config, port, target_address, target_port, socket: Mutex::new(None)});
+    pub fn new(base_config: ChannelConfig, port: u32, target_address: String, target_port: u32) -> UDPChannel {
+        return UDPChannel {base_config, port, target_address, target_port, socket: Mutex::new(None)};
     } 
 }
 
@@ -58,11 +57,20 @@ impl Worker for UDPChannel {
                 //IF the message buffer variable is available
                 //  Sending Buffer Data
                 if let Ok(mut message_buffer) = self.clone().base_config.message_buffer.try_lock() {
-                    //message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
+                    message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
                     //Send and consum all the data in the buffer IF the socket can be cloned for each data in the buffer
                     while  message_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
                         if let Some(msg_to_send)= message_buffer.pop_front() {
-                            self.clone().send_message(ChannelType::UDP(s), msg_to_send);
+                            match self.clone().send_message(ChannelType::UDP(s), msg_to_send) {
+                                Ok(status) => {
+                                    if status == true {
+                                        println!("Data sent to {}:{}", self.clone().target_address, self.clone().target_port);
+                                    }
+                                },
+                                Err(_) => {
+                                    
+                                },
+                            }
                         }
                     }
                 }
@@ -76,18 +84,17 @@ impl Worker for UDPChannel {
                 //                      And it's not a Trait 
                 while let Ok(s)= sock.try_clone() {
                     match self.clone()._listen_port(ChannelType::UDP(s)) {
-                        Ok(frame_received) =>  {
-                            if frame_received.len() > 0 {
-                                self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame(frame_received));   
+                        Ok(frame) => {
+                            if frame.len() > 0 {
+                                self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame(frame));   
                             }
-                        },
+                         },
                         Err(e) => {
                             //IF the error trigger because No data was received
                             if e.kind() == ErrorKind::WouldBlock {
                             }
                             //IF the error trigger because No devices connected
                             if e.kind() == ErrorKind::ConnectionReset {
-
                             }
                             // Stop loop because no data are received or there is error with the socket
                             break;
@@ -100,10 +107,11 @@ impl Worker for UDPChannel {
     }
 
     fn start_routine(self: Arc<Self>) {
+        let mut is_connected = false;
         let this: Arc<UDPChannel>= self.clone();
-        if let Ok(mut buffer) =self.clone().base_config.message_buffer.try_lock() {
+        /*if let Ok(mut buffer) =self.clone().base_config.message_buffer.try_lock() {
             buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
-        }
+        }*/
         //Set the thread in running mode
         if let Ok(mut is_running) = self.clone().base_config.worker_config.is_running.try_lock() {
             *is_running= true;
@@ -116,15 +124,14 @@ impl Worker for UDPChannel {
                     //Stop the thread if the thread is not running 
                     if let Ok(mut is_running) = this.clone().base_config.worker_config.is_running.try_lock() {
                         if !*is_running {
-                            godot_print!("Soft Stop channel thread");
                             println!("Soft Stop channel thread");
                             break;
                         }
                     } else {
-                        godot_print!("Is_Running already used");
                         println!("Is_Running already used");
                     }
                     this.clone().start_task();
+                    
                 }
         });
         
@@ -135,7 +142,7 @@ impl Worker for UDPChannel {
                     match running_thread {
                         Ok(trd) => {*worker_thread= Some(trd)},
                         Err(_) => {
-                            godot_print!("Error in the UDP thread\n")
+                            println!("Error in the UDP thread\n")
                         },
                     }
                     
@@ -143,7 +150,6 @@ impl Worker for UDPChannel {
                 }
             },
             Err(_) => {
-                godot_print!("Thread still lock\n");
                 println!("Thread still lock");
             },
         }
@@ -168,17 +174,14 @@ impl Worker for UDPChannel {
                     Some(thread) => {
                         thread.join();
                         //*worker_thread= None;
-                        godot_print!("Delete the channel thread\n");
                         println!("Delete the channel thread")
                     },
                     None => {
-                        godot_print!("No Existing Thread\n");
                         println!("No Existing Thread")
                     },
                 }
             },
             Err(_) => {
-                godot_print!("Thread still lock\n");
                 println!("Thread still lock");
             },
         }
@@ -193,12 +196,10 @@ impl Channel for UDPChannel {
             Ok(s) => {
                 //Set socket non blocking mod
                 s.set_nonblocking(true).expect("Failed to set socket to non-blocking mode");
-                godot_print!("Connected at {}:{}\n", self.clone().base_config.address, self.clone().port);
                 println!("Connected at {}:{}", self.clone().base_config.address, self.clone().port);
                 return Some(ChannelType::UDP(s));
             },
             Err(e) => { 
-                godot_print!("Not able to create Socket at {}:{}\n", self.clone().base_config.address, self.clone().port);
                 println!("Not able to create Socket at {}:{}", self.clone().base_config.address, self.clone().port);
                 return None;
             }
@@ -212,19 +213,9 @@ impl Channel for UDPChannel {
             Message::Frame(f) => frame= f,
         }
         if let ChannelType::UDP(socket) = port {
-            match socket
-                .send_to(&frame, format!("{}:{}", self.clone().target_address, self.clone().target_port)) {
-                    Ok(_) => { 
-                        return Ok(true);
-                    },
-                    Err(e) => {
-                        let test= e.kind();
-                        let test2= test.to_string();
-                        let a= 1;
-                        return Err(e);
-                    },
-                } 
-                
+            return socket
+                .send_to(&frame, format!("{}:{}", self.clone().target_address, self.clone().target_port))
+                .map(|size| size > 0);
         } else {
             return Ok(false);
         }
