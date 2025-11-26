@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+robomorph= {path= "../../robomorph"}
 imageproc = "=0.25.0"
 show-image = "0.14.1"
