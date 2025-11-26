@@ -7,4 +7,5 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+robomorph= {path= "../../robomorph"}
 godot = { git = "https://github.com/godot-rust/gdext", branch = "master" }
