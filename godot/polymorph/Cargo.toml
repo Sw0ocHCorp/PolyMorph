@@ -1,5 +1,5 @@
 [package]
-name = "flight_controller"
+name = "polymorph"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,4 +8,3 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 godot = { git = "https://github.com/godot-rust/gdext", branch = "master" }
-

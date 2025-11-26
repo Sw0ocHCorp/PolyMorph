@@ -16,7 +16,7 @@ impl<T:Clone + Send + Sync> Event<T> {
         return Event { observers };
     }
 
-    pub fn plugObserver(&mut self, observer: Observer<T>) {
+    pub fn plug_observer(&mut self, observer: Observer<T>) {
         self.observers.push(observer);
     }
 

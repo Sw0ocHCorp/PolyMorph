@@ -1,5 +1,5 @@
-use crate::{process::{Worker, WorkerConfig}};
-use std::{collections::VecDeque, io::{self, ErrorKind}, sync::{Arc, Mutex}, thread::{self}};
+use crate::process::{ModuleLinker, Process};
+use std::{collections::VecDeque, io::{self, ErrorKind}, sync::{Arc, Mutex}};
 use std::net::UdpSocket;
 
 #[derive(Clone)]
@@ -14,18 +14,34 @@ pub enum ChannelType {
 
 pub struct ChannelConfig {
     pub address: String,
-    pub worker_config: WorkerConfig,
+    pub linker: Arc<Mutex<ModuleLinker>>,
     pub message_buffer: Mutex<VecDeque<Message>>,
 }
 
-pub trait Channel : Worker{
+impl ChannelConfig {
+    pub fn new(address: String, linker: ModuleLinker) -> Self {
+        ChannelConfig {
+            address,
+            linker: Arc::new(Mutex::new(linker)),
+            message_buffer: Mutex::new(VecDeque::new()),
+        }
+    }
+}
+
+/**
+ * Channel Trait
+ * Defines the basic fondamental functions of a communication channel
+ * Channel : Process means that every struct implementing Channel must also implement Process
+ * The process will be the way that the channel manages the communication
+ */
+pub trait Channel : Process{
     fn _connect(self: Arc<Self>) -> Option<ChannelType>;
     fn send_message(self: Arc<Self>, port: ChannelType, msg: Message) -> Result<bool, io::Error>;
     fn _listen_port(self: Arc<Self>, port: ChannelType) -> Result<Vec<u8>, io::Error>;
 }
 
 pub struct UDPChannel {
-    base_config: ChannelConfig,
+    pub chan_config: ChannelConfig,
     socket: Mutex<Option<UdpSocket>>,
     port: u32,
     target_address: String,
@@ -34,13 +50,33 @@ pub struct UDPChannel {
 
 
 impl UDPChannel {
-    pub fn new(base_config: ChannelConfig, port: u32, target_address: String, target_port: u32) -> UDPChannel {
-        return UDPChannel {base_config, port, target_address, target_port, socket: Mutex::new(None)};
+    pub fn new(chan_config: ChannelConfig, port: u32, target_address: String, target_port: u32) -> UDPChannel {
+        return UDPChannel {chan_config, port, target_address, target_port, socket: Mutex::new(None)};
     } 
+
+    pub fn get_socket(&self) -> Option<UdpSocket> {
+        if let Ok(socket_guard) = self.socket.try_lock() {
+            if let Some(ref socket) = *socket_guard {
+                return Some(socket.try_clone().expect("Failed to clone UDP socket"));
+            }
+        }
+        return None;
+    }
+
+    pub fn get_port(self: Arc<Self>) -> u32 {
+        return self.clone().port;
+    }
+
+    pub fn get_target_address(self: Arc<Self>) -> String {
+        return self.clone().target_address.clone();
+    }
+    pub fn get_target_port(self: Arc<Self>) -> u32 {
+        return self.clone().target_port;
+    }
 }
 
-impl Worker for UDPChannel {
-    fn start_task(self: Arc<Self>) {
+impl Process for UDPChannel {
+    fn exec_task(self: Arc<Self>) {
         //IF the socket variable is available (the mutex is available)
         if let Ok(mut socket_guard) = self.clone().socket.try_lock() {
             //IF no socket
@@ -56,7 +92,8 @@ impl Worker for UDPChannel {
             if let Some(ref sock) = *socket_guard {
                 //IF the message buffer variable is available
                 //  Sending Buffer Data
-                if let Ok(mut message_buffer) = self.clone().base_config.message_buffer.try_lock() {
+                if let Ok(mut message_buffer) = self.clone().chan_config.message_buffer.try_lock() {
+                    //LET IT FOR TESTING
                     message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
                     //Send and consum all the data in the buffer IF the socket can be cloned for each data in the buffer
                     while  message_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
@@ -74,6 +111,7 @@ impl Worker for UDPChannel {
                         }
                     }
                 }
+                let this= self.clone();
                 //Data Listening
                 //Get the socket instance by cloning the ref of the data protected by the mutex
                 //And call the listening with this UDP socket 
@@ -83,10 +121,11 @@ impl Worker for UDPChannel {
                 //                      File, TcpStream, TcpListener, UdpSocket
                 //                      And it's not a Trait 
                 while let Ok(s)= sock.try_clone() {
-                    match self.clone()._listen_port(ChannelType::UDP(s)) {
+                    match this.clone()._listen_port(ChannelType::UDP(s)) {
                         Ok(frame) => {
-                            if frame.len() > 0 {
-                                self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame(frame));   
+                            if frame.len() > 0 && let Ok(mut linker)= this.clone().chan_config.linker.try_lock() {
+                                linker.send_message(Message::Frame(frame));
+                                //self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame(frame));   
                             }
                          },
                         Err(e) => {
@@ -105,102 +144,20 @@ impl Worker for UDPChannel {
             }
         }
     }
-
-    fn start_routine(self: Arc<Self>) {
-        let mut is_connected = false;
-        let this: Arc<UDPChannel>= self.clone();
-        /*if let Ok(mut buffer) =self.clone().base_config.message_buffer.try_lock() {
-            buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
-        }*/
-        //Set the thread in running mode
-        if let Ok(mut is_running) = self.clone().base_config.worker_config.is_running.try_lock() {
-            *is_running= true;
-        }
-        //Thread used to maintain the UDP connection
-        let running_thread= thread::Builder::new()
-            .name("UDP_WORKER".to_string())
-            .spawn(move || {
-                loop{
-                    //Stop the thread if the thread is not running 
-                    if let Ok(mut is_running) = this.clone().base_config.worker_config.is_running.try_lock() {
-                        if !*is_running {
-                            println!("Soft Stop channel thread");
-                            break;
-                        }
-                    } else {
-                        println!("Is_Running already used");
-                    }
-                    this.clone().start_task();
-                    
-                }
-        });
-        
-        //Store the channel thread in a class variable to be able to correctly end the thread
-        match self.clone().base_config.worker_config.worker_thread.try_lock() {
-            Ok(mut worker_thread) => {
-                if worker_thread.is_none() {
-                    match running_thread {
-                        Ok(trd) => {*worker_thread= Some(trd)},
-                        Err(_) => {
-                            println!("Error in the UDP thread\n")
-                        },
-                    }
-                    
-                    
-                }
-            },
-            Err(_) => {
-                println!("Thread still lock");
-            },
-        }
-    }
-
-    fn stop(self: Arc<Self>) {
-        //Force thread stop by loop as long as the running mode mutex is not available
-        loop {
-            if let Ok(mut is_running) = self.clone().base_config.worker_config.is_running.try_lock() {
-                *is_running= false;
-                break;
-            }
-        }
-        
-    }
-    
-    fn end(self: Arc<Self>) {
-        self.clone().stop();
-        match self.clone().base_config.worker_config.worker_thread.try_lock() {
-            Ok(mut worker_thread) => {
-                match worker_thread.take() {
-                    Some(thread) => {
-                        thread.join();
-                        //*worker_thread= None;
-                        println!("Delete the channel thread")
-                    },
-                    None => {
-                        println!("No Existing Thread")
-                    },
-                }
-            },
-            Err(_) => {
-                println!("Thread still lock");
-            },
-        }
-    }
 }
 
 impl Channel for UDPChannel {
-    
     fn _connect(self: Arc<Self>) -> Option<ChannelType>{
-        match UdpSocket::bind(format!("{}:{}", self.clone().base_config.address.clone(), self.clone().port.clone())) {
+        match UdpSocket::bind(format!("{}:{}", self.clone().chan_config.address.clone(), self.clone().port.clone())) {
             //IF the socket is created
             Ok(s) => {
                 //Set socket non blocking mod
                 s.set_nonblocking(true).expect("Failed to set socket to non-blocking mode");
-                println!("Connected at {}:{}", self.clone().base_config.address, self.clone().port);
+                println!("Connected at {}:{}", self.clone().chan_config.address, self.clone().port);
                 return Some(ChannelType::UDP(s));
             },
             Err(e) => { 
-                println!("Not able to create Socket at {}:{}", self.clone().base_config.address, self.clone().port);
+                println!("Not able to create Socket at {}:{}", self.clone().chan_config.address, self.clone().port);
                 return None;
             }
         };
@@ -226,7 +183,6 @@ impl Channel for UDPChannel {
         if let ChannelType::UDP(socket) = port {
             match socket.recv_from(&mut buf) {
                 Ok((size, src)) => {
-                    //self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame());
                     return Ok(buf[..size].to_vec());
                 },
                 Err(e) => {
@@ -245,3 +201,4 @@ impl Channel for UDPChannel {
         
     }
 }
+

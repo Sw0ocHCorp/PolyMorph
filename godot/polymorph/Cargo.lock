@@ -12,13 +12,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flight_controller"
-version = "0.1.0"
-dependencies = [
- "godot",
-]
-
-[[package]]
 name = "gdextension-api"
 version = "0.3.0"
 source = "git+https://github.com/godot-rust/godot4-prebuilt?branch=release-v0.3#f70baca72747869aaac7781a0cf139f53a2aac19"
@@ -130,6 +123,13 @@ name = "nanoserde-derive"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a846cbc04412cf509efcd8f3694b114fc700a035fb5a37f21517f9fb019f1ebc"
+
+[[package]]
+name = "polymorph"
+version = "0.1.0"
+dependencies = [
+ "godot",
+]
 
 [[package]]
 name = "proc-macro2"
