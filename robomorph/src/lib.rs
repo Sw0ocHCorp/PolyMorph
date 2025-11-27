@@ -1,14 +1,14 @@
 pub mod com_channels;
 pub mod events_management;
 pub mod process;
-
-use std::sync::Arc;
-
-use crate::{com_channels::{ChannelConfig, Message, UDPChannel}, events_management::Observer, process::{ModuleLinker, Worker, WorkerFactory}};
+pub mod messages;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
+    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::Message, process::{ModuleLinker, WorkerFactory}};
+
 
     #[test]
     fn main() {

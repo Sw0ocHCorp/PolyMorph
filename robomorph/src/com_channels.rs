@@ -1,12 +1,8 @@
-use crate::process::{ModuleLinker, Process};
+use crate::{messages::Message, process::{ModuleLinker, Process}};
 use std::{collections::VecDeque, io::{self, ErrorKind}, sync::{Arc, Mutex}};
 use std::net::UdpSocket;
 
-#[derive(Clone)]
-pub enum Message {
-    Sentence(String),
-    Frame(Vec<u8>),
-}
+
 
 pub enum ChannelType {
     UDP(UdpSocket)
@@ -94,7 +90,7 @@ impl Process for UDPChannel {
                 //  Sending Buffer Data
                 if let Ok(mut message_buffer) = self.clone().chan_config.message_buffer.try_lock() {
                     //LET IT FOR TESTING
-                    message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
+                    //message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
                     //Send and consum all the data in the buffer IF the socket can be cloned for each data in the buffer
                     while  message_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
                         if let Some(msg_to_send)= message_buffer.pop_front() {
@@ -168,6 +164,8 @@ impl Channel for UDPChannel {
         match msg {
             Message::Sentence(s) => frame= s.as_bytes().to_vec(),
             Message::Frame(f) => frame= f,
+            Message::Image() => {},
+            Message::LidarMeasurements(items) => todo!(),
         }
         if let ChannelType::UDP(socket) = port {
             return socket
