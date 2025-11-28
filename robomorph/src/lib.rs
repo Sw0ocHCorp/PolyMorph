@@ -2,13 +2,26 @@ pub mod com_channels;
 pub mod events_management;
 pub mod process;
 pub mod messages;
+pub mod utils;
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::Message, process::{ModuleLinker, WorkerFactory}};
+    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::Message, process::{ModuleLinker, WorkerFactory}, utils::normalize_angle};
 
+
+    #[test]
+    fn sim_lidar() {
+        let lidar_points= 200_f64;
+        let lidar_fov= 180_f64;
+        let offset= 180_f64;
+        for i in 0..lidar_points as i32 {
+            let angle = (-lidar_fov / 2.0).to_radians() + ((i as f64 / (lidar_points-1.0)) * lidar_fov).to_radians() + offset.to_radians();
+            //let angle= (-(lidar_fov/2)as f64).to_radians() + (((i / lidar_points) as f64) * lidar_fov as f64).to_radians();
+            print!( "{}\n", normalize_angle(angle as f32).to_degrees());
+        }
+    }
 
     #[test]
     fn main() {

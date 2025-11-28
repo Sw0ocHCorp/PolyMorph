@@ -65,6 +65,9 @@ debug_color = Color(0.6117647, 0.3882353, 0.9490196, 1)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.36, 1, 0)
 
 [node name="AutonomyNode" type="AutonomyNode" parent="Robot"]
+metadata/lidarPoints = 200
+metadata/lidarFov = 180
+metadata/lidarRelativeMidAngle = 180
 
 [node name="StereoCam1VP" type="SubViewport" parent="Robot/AutonomyNode"]
 
