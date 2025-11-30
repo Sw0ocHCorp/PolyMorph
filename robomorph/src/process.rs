@@ -213,11 +213,17 @@ pub struct WorkerFactory {
     workers: Vec<Arc<Worker>>,
 }
 
-impl WorkerFactory {
-    pub fn new() -> Self {
+impl Default for WorkerFactory {
+    fn default() -> Self {
         return WorkerFactory {
             workers: vec![],
         };
+    }
+}
+
+impl WorkerFactory {
+    pub fn new(workers: Vec<Arc<Worker>>) -> Self {
+        return Self { workers };
     }
     /**
      * Create and store a new worker from a given process
