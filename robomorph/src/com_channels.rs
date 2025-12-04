@@ -51,13 +51,19 @@ impl UDPChannel {
         return UDPChannel {chan_config, port, target_address, target_port, socket: Mutex::new(None), frequency: frequency};
     } 
 
-    pub fn get_socket(&self) -> Option<UdpSocket> {
+    pub fn get_socket(self: Arc<Self>) -> Option<UdpSocket> {
         if let Ok(socket_guard) = self.socket.try_lock() {
             if let Some(ref socket) = *socket_guard {
                 return Some(socket.try_clone().expect("Failed to clone UDP socket"));
             }
         }
         return None;
+    }
+
+    pub fn set_socket(self: Arc<Self>, socket: UdpSocket) {
+        if let Ok(mut socket_guard) = self.clone().socket.try_lock() {
+            *socket_guard= Some(socket);
+        }
     }
 
     pub fn get_port(self: Arc<Self>) -> u32 {
@@ -91,7 +97,7 @@ impl Process for UDPChannel {
                 //  Sending Buffer Data
                 if let Ok(mut message_buffer) = self.clone().chan_config.message_buffer.try_lock() {
                     //LET IT FOR TESTING
-                    message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
+                    //message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
                     //Send and consum all the data in the buffer IF the socket can be cloned for each data in the buffer
                     while  message_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
                         if let Some(msg_to_send)= message_buffer.pop_front() {
@@ -166,7 +172,12 @@ impl Channel for UDPChannel {
             Message::Sentence(s) => frame= s.as_bytes().to_vec(),
             Message::Frame(f) => frame= f,
             Message::Image() => {},
-            Message::LidarMeasurements(items) => todo!(),
+            Message::LidarMeasurements(items) => {
+                /*for (k, v) in items {
+                    
+                }*/
+                frame= "TEST".as_bytes().to_vec();
+            },
         }
         if let ChannelType::UDP(socket) = port {
             return socket

@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
-use godot::{classes::PhysicsRayQueryParameters3D, global::{cos, sin}, prelude::*};
+use godot::{classes::{PhysicsRayQueryParameters3D, editor_vcs_interface::ChangeType}, global::{cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::Message, process::ModuleLinker, utils::normalize_angle};
+use robomorph::{com_channels::{Channel, ChannelConfig, ChannelType, UDPChannel}, events_management::Observer, messages::Message, process::ModuleLinker, utils::normalize_angle};
 
 
 #[derive(GodotClass)]
@@ -23,6 +23,22 @@ pub struct AutonomyNode {
 impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
+        self.udp=Some(Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
+                                                                                ModuleLinker::new("UDP2_WORKER".to_string())), 
+                                                                                8080, "127.0.0.1".to_string(), 8090, 1)));
+                                                                                
+        if let Some(udp_clone)= self.udp.clone() {
+            loop {
+                if let Some(socket) = udp_clone.clone().get_socket() {
+                    break;
+                } 
+                else {
+                    if let Some(socket) = udp_clone.clone()._connect() &&  let ChannelType::UDP(s)= socket{
+                        udp_clone.clone().set_socket(s);
+                    }
+                }        
+            }
+        }
         //Get and store the metadata of the 
         if self.base().has_meta("lidarPoints") {
             match self.base().get_meta("lidarPoints").try_to::<i32>() {
@@ -123,14 +139,19 @@ impl INode3D for AutonomyNode{
         }
         //IF the UDP module exist
         if let Some(udp) = &self.udp {
-            //IF the ModuleLinker is available
-            if let Ok(mut linker)= udp.clone().chan_config.linker.try_lock() {
-                //IF there is measurements
+            //IF there is measurements
+            if let Some(socket)= udp.clone().get_socket() {
                 if measurements.len() > 0 {
                     //Send thoses measurements
-                    linker.send_message(Message::LidarMeasurements(measurements));
+                    if let Err(_)= udp.clone().send_message(robomorph::com_channels::ChannelType::UDP(socket), Message::LidarMeasurements(measurements)) {
+                        println!("ERROR: Failed to send UDP frame");
+                    }
+                    //udp.send_message(ChannelType::UDP(socket), Message::LidarMeasurements(measurements))
+                    //linker.send_message(Message::LidarMeasurements(measurements));
                 }
             }
+        } else {
+            let a= 1;
         }
     }
 
