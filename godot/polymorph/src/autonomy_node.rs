@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use godot::{classes::{PhysicsRayQueryParameters3D, editor_vcs_interface::ChangeType}, global::{cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{com_channels::{Channel, ChannelConfig, ChannelType, UDPChannel}, events_management::Observer, messages::Message, process::ModuleLinker, utils::normalize_angle};
+use robomorph::{com_channels::{Channel, ChannelConfig, ChannelType, UDPChannel}, events_management::Observer, messages::{LidarMessageProperties, Message, MessageType}, process::ModuleLinker, translator::Translator, utils::normalize_angle};
 
 
 #[derive(GodotClass)]
@@ -23,9 +23,16 @@ pub struct AutonomyNode {
 impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
-        self.udp=Some(Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
-                                                                                ModuleLinker::new("UDP2_WORKER".to_string())), 
-                                                                                8080, "127.0.0.1".to_string(), 8090, 1)));
+        //let test= vec![]
+        let mut translat= Translator::new(vec![0xab, 0xcd], vec![
+            Box::new(LidarMessageProperties {lidar_range_id:vec![0x00, 0x01], lidar_measurements_id: vec![0x00, 0x0a]}),
+        ]);
+        self.udp=Some(Arc::new(UDPChannel::new(ChannelConfig::new_with_translator(  "127.0.0.1".to_string(),
+                                                                                    ModuleLinker::new("UDP2_WORKER".to_string()), 
+                                                                                    translat
+                                                                                ), 
+                                                                                8080, "127.0.0.1".to_string(), 8090, 1
+                                                )));
                                                                                 
         if let Some(udp_clone)= self.udp.clone() {
             loop {
@@ -90,7 +97,7 @@ impl INode3D for AutonomyNode{
 
     fn process(&mut self, delta: f64) {
         //Detect the collision point between the raycast and the rigidBodies in the scene
-        let mut measurements:HashMap<OrderedFloat<f64>, f64>= HashMap::new();
+        let mut measurements:HashMap<OrderedFloat<f32>, f32>= HashMap::new();
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
@@ -116,8 +123,8 @@ impl INode3D for AutonomyNode{
                                     match pos_variant.try_to::<Vector3>() {
                                         Ok(pos) => {
                                             //Add the distance with the rigidbody in the list, keyed by angle
-                                            let distance = origin.distance_to(pos) as f64;
-                                            measurements.insert(OrderedFloat(angle), distance);
+                                            let distance = origin.distance_to(pos);
+                                            measurements.insert(OrderedFloat(angle as f32), distance);
                                             //measurements.push(origin.distance_to(pos));
                                         },
                                         Err(_) => {
@@ -143,8 +150,17 @@ impl INode3D for AutonomyNode{
             if let Some(socket)= udp.clone().get_socket() {
                 if measurements.len() > 0 {
                     //Send thoses measurements
-                    if let Err(_)= udp.clone().send_message(robomorph::com_channels::ChannelType::UDP(socket), Message::LidarMeasurements(measurements)) {
-                        println!("ERROR: Failed to send UDP frame");
+                    match udp.clone().send_message(robomorph::com_channels::ChannelType::UDP(socket), Message::LidarMeasurements(measurements)) {
+                        Ok(status) => {
+                            if status == -1 {
+                                godot_print!("ERROR: Socket or Translator is busy");
+                            } else {
+                                godot_print!("{} Lidar Measurements sent to {}:{}", status, udp.clone().get_target_address(), udp.clone().get_target_port());
+                            }
+                        },
+                        Err(_) => {
+                            godot_print!("ERROR: Failed to send UDP frame");
+                        },
                     }
                     //udp.send_message(ChannelType::UDP(socket), Message::LidarMeasurements(measurements))
                     //linker.send_message(Message::LidarMeasurements(measurements));

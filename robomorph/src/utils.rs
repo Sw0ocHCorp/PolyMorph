@@ -7,3 +7,15 @@ pub fn normalize_angle(rad_angle: f32) -> f32 {
     }
     return zero2pi_angle - 180_f32.to_radians();
 }
+
+pub fn contains_subslice<T: PartialEq>(src: &[T], target: &[T]) -> bool {
+    if src.len() < target.len() {
+        return false;
+    }
+    for i in 0..=(src.len() - target.len()) {
+        if &src[i..i + target.len()] == target {
+            return true;
+        }
+    }
+    false
+}

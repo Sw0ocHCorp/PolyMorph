@@ -1,6 +1,6 @@
 use std::{sync::{Arc, Mutex}, thread::{self, JoinHandle}};
 
-use crate::{com_channels, events_management, messages::Message};
+use crate::{com_channels, events_management, messages::{FeatureMessage, Translatable}};
 
 /**
  * Trait used to execute a specific process task
@@ -20,11 +20,11 @@ pub struct ModuleLinker {
     /**
      * Event to send data to other module
      */
-    data_event: events_management::Event<Message>,
+    data_event: events_management::Event<Arc<Box<dyn Translatable>>>,
     /**
      * Observer to receive data from other module
      */
-    data_observer: Option<events_management::Observer<Message>>,
+    data_observer: Option<events_management::Observer<Arc<Box<dyn Translatable>>>>,
     /**
      * Event to trigger next module in the chain
      */
@@ -56,8 +56,8 @@ impl ModuleLinker {
     /** 
      * Send data to the modules attached as observers to the data_event
      */
-    pub fn send_message(&self, msg: Message) {
-        self.data_event.trig(msg);
+    pub fn publish_message(&self, msg: Box<dyn Translatable> ) {
+        self.data_event.trig(Arc::new(msg));
     }
     /**
      * Tell the next module in the chain to start its task
@@ -74,7 +74,7 @@ impl ModuleLinker {
     /**
      * Attach observer to send data to the given observer when data is available
      */
-    pub fn attach_data_observer(&mut self, data_observer: events_management::Observer<Message>) {
+    pub fn attach_data_observer(&mut self, data_observer: events_management::Observer<Arc<Box<dyn Translatable>>>) {
         self.data_event.plug_observer(data_observer);
     }
 
@@ -84,10 +84,10 @@ impl ModuleLinker {
     /**
      * Set the data observer called when data is received from an event(possibly an event in another module)
      */
-    pub fn set_data_observer(&mut self, data_observer: events_management::Observer<Message>) {
+    pub fn set_data_observer(&mut self, data_observer: events_management::Observer<Arc<Box<dyn Translatable>>>) {
         self.data_observer= Some(data_observer);
     }
-    pub fn get_data_observer(&self) -> Option<events_management::Observer<Message>> {
+    pub fn get_data_observer(&self) -> Option<events_management::Observer<Arc<Box<dyn Translatable>>>> {
         return self.data_observer.clone();
     }
 

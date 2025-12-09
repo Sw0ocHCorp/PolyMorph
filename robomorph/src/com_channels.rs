@@ -1,4 +1,4 @@
-use crate::{messages::Message, process::{ModuleLinker, Process}};
+use crate::{messages::FeatureMessage, process::{ModuleLinker, Process}, translator::Translator};
 use std::{collections::VecDeque, io::{self, ErrorKind}, sync::{Arc, Mutex}};
 use std::net::UdpSocket;
 
@@ -11,7 +11,8 @@ pub enum ChannelType {
 pub struct ChannelConfig {
     pub address: String,
     pub linker: Arc<Mutex<ModuleLinker>>,
-    pub message_buffer: Mutex<VecDeque<Message>>,
+    pub FeatureMessage_buffer: Mutex<VecDeque<FeatureMessage>>,
+    pub custom_translator: Mutex<Translator>,
 }
 
 impl ChannelConfig {
@@ -19,8 +20,17 @@ impl ChannelConfig {
         ChannelConfig {
             address,
             linker: Arc::new(Mutex::new(linker)),
-            message_buffer: Mutex::new(VecDeque::new()),
+            FeatureMessage_buffer: Mutex::new(VecDeque::new()),
+            custom_translator: Mutex::new(Translator::default())
         }
+    }
+
+    pub fn new_with_translator(address: String, linker: ModuleLinker, custom_translator: Translator) -> Self {
+        let config= ChannelConfig::new(address, linker);
+        if let Ok(mut translat) = config.custom_translator.try_lock() {
+            *translat= custom_translator;   
+        }
+        return config;
     }
 }
 
@@ -32,7 +42,7 @@ impl ChannelConfig {
  */
 pub trait Channel : Process{
     fn _connect(self: Arc<Self>) -> Option<ChannelType>;
-    fn send_message(self: Arc<Self>, port: ChannelType, msg: Message) -> Result<bool, io::Error>;
+    fn send_message(self: Arc<Self>, port: ChannelType, msg: FeatureMessage) -> Result<i32, io::Error>;
     fn _listen_port(self: Arc<Self>, port: ChannelType) -> Result<Vec<u8>, io::Error>;
 }
 
@@ -93,17 +103,19 @@ impl Process for UDPChannel {
             }
             //IF the socket exist (not NONE) -> Send the data in the buffer and listen the incoming frames
             if let Some(ref sock) = *socket_guard {
-                //IF the message buffer variable is available
+                //IF the FeatureMessage buffer variable is available
                 //  Sending Buffer Data
-                if let Ok(mut message_buffer) = self.clone().chan_config.message_buffer.try_lock() {
+                if let Ok(mut FeatureMessage_buffer) = self.clone().chan_config.FeatureMessage_buffer.try_lock() {
                     //LET IT FOR TESTING
-                    //message_buffer.push_back(Message::Frame("CAVA".as_bytes().to_vec()));
+                    //FeatureMessage_buffer.push_back(FeatureMessage::Frame("CAVA".as_bytes().to_vec()));
                     //Send and consum all the data in the buffer IF the socket can be cloned for each data in the buffer
-                    while  message_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
-                        if let Some(msg_to_send)= message_buffer.pop_front() {
+                    while  FeatureMessage_buffer.len() > 0 && let Ok(s)= sock.try_clone() {
+                        if let Some(msg_to_send)= FeatureMessage_buffer.pop_front() {
                             match self.clone().send_message(ChannelType::UDP(s), msg_to_send) {
                                 Ok(status) => {
-                                    if status == true {
+                                    if status == -1 {
+                                        println!("ERROR: ")
+                                    } else {
                                         println!("Data sent to {}:{}", self.clone().target_address, self.clone().target_port);
                                     }
                                 },
@@ -127,8 +139,15 @@ impl Process for UDPChannel {
                     match this.clone()._listen_port(ChannelType::UDP(s)) {
                         Ok(frame) => {
                             if frame.len() > 0 && let Ok(mut linker)= this.clone().chan_config.linker.try_lock() {
-                                linker.send_message(Message::Frame(frame));
-                                //self.clone().base_config.worker_config.process_config.data_event.trig(Message::Frame(frame));   
+                                if let Ok(mut translat) = self.clone().chan_config.custom_translator.try_lock() {
+                                    if let Some(msgs) = translat.translate_to_messages(frame) {
+                                        for msg in msgs {
+                                            linker.publish_message(msg); 
+                                        }
+                                    }
+                                      
+                                }
+                                //self.clone().base_config.worker_config.process_config.data_event.trig(FeatureMessage::Frame(frame));   
                             }
                          },
                         Err(e) => {
@@ -166,25 +185,31 @@ impl Channel for UDPChannel {
         };
     }
 
-    fn send_message(self: Arc<Self>, port: ChannelType, msg: Message) -> Result<bool, io::Error> {
+    fn send_message(self: Arc<Self>, port: ChannelType, msg: FeatureMessage) -> Result<i32, io::Error> {
         let mut frame:Vec<u8>= Vec::new();
-        match msg {
-            Message::Sentence(s) => frame= s.as_bytes().to_vec(),
-            Message::Frame(f) => frame= f,
-            Message::Image() => {},
-            Message::LidarMeasurements(items) => {
-                /*for (k, v) in items {
-                    
-                }*/
-                frame= "TEST".as_bytes().to_vec();
-            },
+        //self.clone().chan_config.custom_translator.
+        if let Ok(translat) = self.clone().chan_config.custom_translator.try_lock() { 
+            if let ChannelType::UDP(socket) = port{
+            
+                //frame= translat.translate_to_frame(msg);
+                //frame= "TEST".as_bytes().to_vec();
+                match socket
+                    .send_to(&frame, format!("{}:{}", self.clone().target_address, self.clone().target_port)) {
+                        Ok(_) => {
+                            return Ok(frame.len() as i32);
+                        },
+                        Err(e) => {return Err(e);},
+                    }
+                /*return socket
+                    .send_to(&frame, format!("{}:{}", self.clone().target_address, self.clone().target_port))
+                    .map(|size| size > 0);*/
+            }
+            else {
+                return Ok(-1);
+            }
         }
-        if let ChannelType::UDP(socket) = port {
-            return socket
-                .send_to(&frame, format!("{}:{}", self.clone().target_address, self.clone().target_port))
-                .map(|size| size > 0);
-        } else {
-            return Ok(false);
+        else {
+            return Ok(-1);
         }
     }
 

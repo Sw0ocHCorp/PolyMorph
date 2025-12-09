@@ -3,12 +3,15 @@ pub mod events_management;
 pub mod process;
 pub mod messages;
 pub mod utils;
+pub mod translator;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
-    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::Message, process::{ModuleLinker, WorkerFactory}, utils::normalize_angle};
+    use ordered_float::OrderedFloat;
+
+    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::{FeatureMessage, FeatureProperties, LidarMessage, LidarMessageProperties, Translatable}, process::{ModuleLinker, WorkerFactory}, translator::Translator, utils::normalize_angle};
 
 
     /*#[test]
@@ -23,29 +26,29 @@ mod tests {
         }
     }*/
 
-    #[test]
+    /*#[test]
     fn main() {
         let mut worker_factory= WorkerFactory::default();
         //Create the UDP Channels / Modules
-        /*let udp=Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
+        let udp=Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
                                                                                 ModuleLinker::new("UDP1_WORKER".to_string())), 
-                                                                                8090, "127.0.0.1".to_string(), 8080, 5));*/
+                                                                                8090, "127.0.0.1".to_string(), 8080, 5));
         let udp2=Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
                                                                                 ModuleLinker::new("UDP2_WORKER".to_string())), 
                                                                                 8080, "127.0.0.1".to_string(), 8090, 1));
         //let udp_cl= udp.clone();
         let udp2_cl= udp2.clone();
         //Configure the modules linkers and register the modules(because implement a process) in the worker factory
-        if /*let Ok(mut linker)= udp.clone().chan_config.linker.try_lock() &&*/ let Ok(mut linker2) = udp2.clone().chan_config.linker.try_lock() {
+        if let Ok(mut linker)= udp.clone().chan_config.linker.try_lock() && let Ok(mut linker2) = udp2.clone().chan_config.linker.try_lock() {
             //Set the data observers to received the incoming data from the other UDP channel module
-            /*let udp1_name= linker.get_module_name().clone();
+            let udp1_name= linker.get_module_name().clone();
             linker.set_data_observer(Observer::new(Arc::new(Box::new(move |x| {
                 if let Message::Frame(msg) = x {
                     if let Ok(data)= String::from_utf8(msg) {
                         println!("{}= Incoming data {} from {}:{}", udp1_name, data, udp_cl.clone().get_target_address(), udp_cl.clone().get_target_port());
                     }
                 }
-            }))));*/
+            }))));
             let udp2_name= linker2.get_module_name().clone();
             linker2.set_data_observer(Observer::new(Arc::new(Box::new(move |x| {
                 if let Message::Frame(msg) = x {
@@ -55,14 +58,14 @@ mod tests {
                 }
             }))));
             //Attach the data observers to the other module linker to enable cross-module communication
-            /*if let Some(udp_obs) = linker.get_data_observer() {
+            if let Some(udp_obs) = linker.get_data_observer() {
                 linker2.attach_data_observer(udp_obs);
                 
             }
             if let Some(udp2_obs) = linker2.get_data_observer() {
                 linker.attach_data_observer(udp2_obs);
                 
-            }*/
+            }
             //Register the modules in the worker factory with their respective worker frequencies
             //The factorty can now start and manage the workers for these modules
             //worker_factory.register_process(linker.get_module_name(), udp.clone(), udp.clone().frequency);
@@ -74,12 +77,46 @@ mod tests {
         }
         let mut prev= std::time::Instant::now();
         loop {
-            /*let now= std::time::Instant::now();
+            let now= std::time::Instant::now();
             let elapsed= now.duration_since(prev);
             if elapsed.as_secs() >= 5 && worker_factory.get_factory_size() > 0 {
                 worker_factory.end_all_process_workers();
                 break;
-            }*/
+            }
         }
+    }*/
+
+    #[test]
+    fn main() {
+        //Define the parsing properties of the features availables in the robot
+        let lidar_properties= LidarMessageProperties{range_id: vec![0x00, 0x0a], measurements_id: vec![0x00, 0x0b]};
+        //The list of messages to send in a single frame
+        let test_msgs:Vec<Box<dyn Translatable>> = Vec::from([
+                                                            Box::new(LidarMessage{properties_ids: lidar_properties.clone(), measurements: HashMap::from([
+                                                                                                                                            (OrderedFloat::from(-90.0 as f32), 5.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(0.0 as f32), 5.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(90.0 as f32), 5.0 as f32),
+                                                                                                                                ])}) as Box<dyn Translatable>,
+                                                            Box::new(LidarMessage{properties_ids: lidar_properties.clone(), measurements: HashMap::from([
+                                                                                                                                            (OrderedFloat::from(45.0 as f32), 10.0 as f32),
+                                                                                                                                            (OrderedFloat::from(30.0 as f32), 50.0 as f32),
+                                                                                                                                            (OrderedFloat::from(15.0 as f32), 40.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(0.0 as f32), 5.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(-15.0 as f32), 10.0 as f32),
+                                                                                                                                            (OrderedFloat::from(-30.0 as f32), 50.0 as f32),
+                                                                                                                                            (OrderedFloat::from(-45.0 as f32), 40.0 as f32),
+                                                                                                                                ])}) as Box<dyn Translatable>,
+                                                        ]);
+        let translations= HashMap::from([(5 as u16, FeatureProperties::LidarScan(LidarMessageProperties { range_id: vec![0x00, 0x0a], measurements_id: vec![0x00, 0x0b] })),]);
+        let mut translat= Translator::new(vec![0xab, 0xcd], translations);
+        let frame= translat.translate_to_frame(test_msgs);
+        if let Some(messages) = translat.translate_to_messages(frame) {
+            for message in messages {
+                if let Some(msg) = message.downcast_ref::<LidarMessage>() {
+                    println!("{:?}", msg.measurements.clone());
+                }
+            }
+        }
+        
     }
 }

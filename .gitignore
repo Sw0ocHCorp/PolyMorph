@@ -13,3 +13,5 @@ godot/polymorph/target/
 robomorph/target/
 
 controller/target/
+
+*.lock

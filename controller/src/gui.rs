@@ -54,7 +54,7 @@ impl Controller {
         
 
     pub fn process_event_message(&mut self, event_msg: Message) {
-        match event_msg {
+        /*match event_msg {
             Message::Sentence(sentence) => {
                 println!("Sentence= Incoming data {}", sentence);
             },
@@ -70,7 +70,7 @@ impl Controller {
                     lidar_meas.push((dist*f64::cos(angle.into()), dist*f64::sin(angle.into())));
                 }
             },
-        }
+        }*/
     }
 
     pub fn run(&mut self)  -> Result<(), slint::PlatformError> {
@@ -102,18 +102,22 @@ impl Controller {
                                 while lnk.is_data_in_buffer() {
                                     if let Some(data) = lnk.get_incoming_data() {
                                         match data {
-                                            Message::Sentence(_) => {},
-                                            Message::Frame(frame) => {
-                                                if let Ok(msg)= String::from_utf8(frame) {
-                                                    println!("Incoming data {} ", msg);
-                                                }
-                                            }
-                                            Message::Image() => todo!(),
-                                            Message::LidarMeasurements(hash_map) => {
-                                                println!("Incoming data");
+                                            Message::Command(frame) => {
+                                                println!("Command Incoming data {} ", frame);
+                                            },
+                                            Message::Image() => {
+                                                println!("Image Incoming data");
+                                            },
+                                            Message::LidarMeasurements(lidar_mes) => {
+                                                println!("Incoming data LIDAR MEASUREMENTS");
                                             },
                                         }
                                     }
+                                    /*
+                                            Message::Image() => todo!(),
+                                            Message::LidarMeasurements(hash_map) => {
+                                                println!("Incoming data");
+                                            },*/
                                 }
                             }
                         }
