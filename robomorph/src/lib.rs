@@ -3,6 +3,10 @@ use crate::worker::Module;
 pub mod event_management;
 pub mod worker;
 pub mod communication;
+pub mod messages;
+pub mod lidar;
+pub mod utils;
+
 
 #[cfg(test)]
 mod TestLinkModules {
@@ -47,11 +51,11 @@ mod TestComInterface {
         let mut udp1= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 9000);
         let mut udp2= UDPChannel::new_async("127.0.0.1", 9000, "127.0.0.1", 8080);
         if let Some(cmd_observer)= udp2.get_cmd_observer() {
-            udp1.set_data_observer(cmd_observer);
+            udp1.add_data_observer(cmd_observer);
         }
         let udp_cl= udp2.clone();
         if let Some(observer)= udp1.get_cmd_observer() {
-            udp2.set_data_observer(observer);
+            udp2.add_data_observer(observer);
         }
         let worker1= Worker::new(udp1, "UDP1", 100);
         let worker2= Worker::new(udp2, "UDP2", 50);
@@ -59,10 +63,42 @@ mod TestComInterface {
         
         worker1.run_in_dedicated_thread();
         thread::sleep(time::Duration::from_secs(1));
-        udp_cl.clone().publish_cmd("COUCOU".into());
+        udp_cl.clone().publish_message("COUCOU".into());
         while true {
             
             
         }
+    }
+}
+
+mod TestSerializationDeserialization {
+    use std::collections::HashMap;
+
+    use ordered_float::OrderedFloat;
+
+    use crate::{lidar::LidarMeasurements, messages::{self, Translatable}};
+
+    #[test]
+    fn it_works() {
+        let test_msgs:Vec<Box<dyn Translatable>>= vec![
+                                                            Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
+                                                                                                                                (OrderedFloat::from(-90.0 as f32), 10.0 as f32), 
+                                                                                                                                (OrderedFloat::from(0.0 as f32), 2.5 as f32), 
+                                                                                                                                (OrderedFloat::from(90.0 as f32), 5.0 as f32),
+                                                                                                                            ]))),
+                                                            Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
+                                                                                                                                            (OrderedFloat::from(45.0 as f32), 10.0 as f32),
+                                                                                                                                            (OrderedFloat::from(30.0 as f32), 50.0 as f32),
+                                                                                                                                            (OrderedFloat::from(15.0 as f32), 40.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(0.0 as f32), 5.0 as f32), 
+                                                                                                                                            (OrderedFloat::from(-15.0 as f32), 10.0 as f32),
+                                                                                                                                            (OrderedFloat::from(-30.0 as f32), 50.0 as f32),
+                                                                                                                                            (OrderedFloat::from(-45.0 as f32), 40.0 as f32),
+                                                                                                                                ])))                 
+                                                        ];
+        let frame= messages::convert_to_frame(test_msgs);
+        println!("Frame= {:?}",frame);
+        let translatables= messages::parse_frame(frame);
+        println!("{}", translatables.len())
     }
 }

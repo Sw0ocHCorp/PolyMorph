@@ -1,11 +1,6 @@
 use std::{collections::VecDeque, io::{self, Error}, net::UdpSocket, sync::{Arc, Mutex}};
 
-use crate::{event_management::{Event, Observer}, worker::Module};
-
-pub trait Translatable {
-    fn to_msg(&mut self);
-    fn fill_from_msg(&mut self);
-}
+use crate::{event_management::{Event, Observer}, messages::Translatable, worker::Module};
 
 
 pub trait Channel : Module {
@@ -23,14 +18,13 @@ pub struct UDPChannel {
     socket: Arc<Mutex<Option<UdpSocket>>>,
     cmd_observer: Mutex<Option<Observer<Vec<u8>>>>,
     frame_event: Mutex<Event<Vec<u8>>>,
-    is_running: bool
 }
 
 impl UDPChannel {
     pub fn new(addr: &str, port: u32, target_addr: &str, target_port: u32) -> Arc<Self> {
         let mut udp= Arc::new(Self{addr: addr.to_string(),port: port, socket: Arc::new(Mutex::new(None)),
                                                             frame_event: Mutex::new(Event::new_empty()), cmd_observer: Mutex::new(None),
-                                                        target_addr: target_addr.to_string(), target_port: target_port, is_running: false});
+                                                        target_addr: target_addr.to_string(), target_port: target_port});
         let udp_cl= udp.clone();
         let obs= Observer::new(Arc::new(Mutex::new(move |x: Vec<u8>| {
             udp_cl.send_message(x);
@@ -44,7 +38,7 @@ impl UDPChannel {
     pub fn new_async(addr: &str, port: u32, target_addr: &str, target_port: u32) -> Arc<Self> {
         return Arc::new(Self{addr: addr.to_string(),port: port, socket: Arc::new(Mutex::new(None)),
                                                         target_addr: target_addr.to_string(), target_port: target_port,
-                                                    frame_event: Mutex::new(Event::new_empty()), cmd_observer: Mutex::new(Some(Observer::new_async())), is_running: false});
+                                                    frame_event: Mutex::new(Event::new_empty()), cmd_observer: Mutex::new(Some(Observer::new_async()))});
     }
 
     pub fn get_cmd_observer(&self) -> Option<Observer<Vec<u8>>> {
@@ -61,13 +55,13 @@ impl UDPChannel {
         }
     }
 
-    pub fn publish_cmd(&self, msg: Vec<u8>) {
-        if let Ok(cmd_event) = self.frame_event.try_lock() {
-            cmd_event.trig(msg);
+    pub fn publish_message(&self, msg: Vec<u8>) {
+        if let Ok(msg_event) = self.frame_event.try_lock() {
+            msg_event.trig(msg);
         }
     }
 
-    pub fn set_data_observer(&self, data_observer: Observer<Vec<u8>>) {
+    pub fn add_data_observer(&self, data_observer: Observer<Vec<u8>>) {
         if let Ok(mut frame_event)= self.frame_event.try_lock() {
             frame_event.plug_observer(data_observer);
         }

@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use godot::{classes::{PhysicsRayQueryParameters3D, editor_vcs_interface::ChangeType}, global::{cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{com_channels::{Channel, ChannelConfig, ChannelType, UDPChannel}, events_management::Observer, messages::{LidarMessageProperties, Message, MessageType}, process::ModuleLinker, translator::Translator, utils::normalize_angle};
+use robomorph::{communication::UDPChannel, messages::Translatable, worker::Module};
 
 
 #[derive(GodotClass)]
@@ -24,7 +24,9 @@ impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
         //let test= vec![]
-        let mut translat= Translator::new(vec![0xab, 0xcd], vec![
+        self.udp= Some(UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090));
+
+        /*let mut translat= Translator::new(vec![0xab, 0xcd], vec![
             Box::new(LidarMessageProperties {lidar_range_id:vec![0x00, 0x01], lidar_measurements_id: vec![0x00, 0x0a]}),
         ]);
         self.udp=Some(Arc::new(UDPChannel::new(ChannelConfig::new_with_translator(  "127.0.0.1".to_string(),
@@ -45,7 +47,7 @@ impl INode3D for AutonomyNode{
                     }
                 }        
             }
-        }
+        }*/
         //Get and store the metadata of the 
         if self.base().has_meta("lidarPoints") {
             match self.base().get_meta("lidarPoints").try_to::<i32>() {
@@ -97,7 +99,7 @@ impl INode3D for AutonomyNode{
 
     fn process(&mut self, delta: f64) {
         //Detect the collision point between the raycast and the rigidBodies in the scene
-        let mut measurements:HashMap<OrderedFloat<f32>, f32>= HashMap::new();
+        let mut measurements= LidarMeasurements::default();
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
@@ -124,7 +126,7 @@ impl INode3D for AutonomyNode{
                                         Ok(pos) => {
                                             //Add the distance with the rigidbody in the list, keyed by angle
                                             let distance = origin.distance_to(pos);
-                                            measurements.insert(OrderedFloat(angle as f32), distance);
+                                            measurements.insert(angle as f32, distance);
                                             //measurements.push(origin.distance_to(pos));
                                         },
                                         Err(_) => {
@@ -147,7 +149,13 @@ impl INode3D for AutonomyNode{
         //IF the UDP module exist
         if let Some(udp) = &self.udp {
             //IF there is measurements
-            if let Some(socket)= udp.clone().get_socket() {
+            if let Some(udp) = self.udp.clone() {
+                if measurements.len() > 0 {
+                    udp.publish_message(measurements.to_bytes());
+                }
+                udp.exec_main_task();
+            }
+            /*if let Some(socket)= udp.clone().get_socket() {
                 if measurements.len() > 0 {
                     //Send thoses measurements
                     match udp.clone().send_message(robomorph::com_channels::ChannelType::UDP(socket), Message::LidarMeasurements(measurements)) {
@@ -165,7 +173,7 @@ impl INode3D for AutonomyNode{
                     //udp.send_message(ChannelType::UDP(socket), Message::LidarMeasurements(measurements))
                     //linker.send_message(Message::LidarMeasurements(measurements));
                 }
-            }
+            }*/
         } else {
             let a= 1;
         }
