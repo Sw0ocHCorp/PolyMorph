@@ -18,7 +18,7 @@ impl<T:Clone + Send + Sync + 'static> Observer<T> {
         let mut obs = Observer {
             is_async: true,
             callback: None,
-            buffer: Arc::new(Mutex::new(VecDeque::new())),
+            buffer: Arc::new(Mutex::new(VecDeque::new()))
         };
         let buffer_clone = obs.buffer.clone();
         obs.callback = Some(Arc::new(Mutex::new(move |x: T| {

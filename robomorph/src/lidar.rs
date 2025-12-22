@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ordered_float::OrderedFloat;
 
-use crate::{messages::{DataChunk, Translatable}, utils};
+use crate::{messages::{DataChunk, Translatable}, utils, worker::Module};
 
 pub const LIDAR_ANGLE_RANGE: u16= 0x000a;
 pub const LIDAR_MEASUREMENT: u16= 0x000b;
@@ -102,56 +102,6 @@ impl Translatable for LidarMeasurements {
             }
 
         }
-        /*let mut buffer= Vec::new();
-        let mut first_angle= 0.0;
-        let mut last_angle= 0.0;
-        let mut id= 0;
-        let mut remain_data= 0;
-        let mut data_size=0;
-        let mut i= 0;
-        while i < bytes.len() {
-            buffer.push(bytes[i]);
-            if id == LIDAR_MEASUREMENT {
-                if buffer.len() == 4 && remain_data > 0 {
-                    if let Ok(arr) = buffer.clone().try_into() {
-                        let angle= first_angle + (1.0 - (remain_data  / data_size) as f32)*(last_angle * first_angle);
-                        self.insert(angle, f32::from_be_bytes(arr)); 
-                    }
-                    remain_data -= 4;
-                    i += 4;
-                    buffer.clear();
-                }
-            }
-            else if utils::contain_bytes(buffer.clone(), LIDAR_ANGLE_RANGE.to_be_bytes().to_vec()) >= 0{
-                id = LIDAR_ANGLE_RANGE;
-                i+=1;
-                if let Ok(arr) = bytes[i..i+2].try_into() {
-                    let _= u16::from_be_bytes(arr);
-                    i += 2;
-                    if let Ok(arr) = bytes[i..i+4].try_into() {
-                        first_angle= f32::from_be_bytes(arr);
-                    }
-                    i+= 4;
-                    if let Ok(arr) = bytes[i..i+4].try_into() {
-                        last_angle= f32::from_be_bytes(arr);
-                    }
-                    i+=4
-                }
-                buffer.clear();
-            }
-            else if utils::contain_bytes(buffer.clone(), LIDAR_MEASUREMENT.to_be_bytes().to_vec()) >= 0{
-                id= LIDAR_MEASUREMENT;
-                i+=1;
-                if let Ok(arr)= bytes[i..i+2].try_into() {
-                    remain_data= u16::from_be_bytes(arr);
-                    data_size= u16::from_be_bytes(arr);
-                }
-                i += 2;
-                buffer.clear();
-            }
-            i+=1;
-            
-        }*/
         return i as usize;
     }
 
@@ -178,3 +128,14 @@ impl Translatable for LidarMeasurements {
         return frame;
     }
 }
+
+pub struct LidarPerceptionManager {
+    
+}
+
+impl Module for LidarPerceptionManager {
+    fn exec_main_task(&self) {
+        
+    }
+}
+

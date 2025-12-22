@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use godot::{classes::{PhysicsRayQueryParameters3D, editor_vcs_interface::ChangeType}, global::{cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, messages::Translatable, worker::Module};
+use robomorph::{communication::UDPChannel, lidar::LidarMeasurements, messages::Translatable, worker::Module};
 
 
 #[derive(GodotClass)]
@@ -99,7 +99,7 @@ impl INode3D for AutonomyNode{
 
     fn process(&mut self, delta: f64) {
         //Detect the collision point between the raycast and the rigidBodies in the scene
-        let mut measurements= LidarMeasurements::default();
+        let mut measurements= LidarMeasurements::new();
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
