@@ -18,12 +18,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "downcast-rs"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
-
-[[package]]
 name = "gdextension-api"
 version = "0.3.0"
 source = "git+https://github.com/godot-rust/godot4-prebuilt?branch=release-v0.3#f70baca72747869aaac7781a0cf139f53a2aac19"
@@ -214,7 +208,6 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 name = "robomorph"
 version = "0.1.0"
 dependencies = [
- "downcast-rs",
  "ordered-float",
 ]
 

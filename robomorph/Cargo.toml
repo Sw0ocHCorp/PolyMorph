@@ -5,4 +5,3 @@ edition = "2024"
 
 [dependencies]
 ordered-float = "5.1.0"
-downcast-rs = "2.0.2"

@@ -1,103 +1,120 @@
-pub mod com_channels;
-pub mod events_management;
-pub mod process;
+use crate::worker::Module;
+
+pub mod event_management;
+pub mod worker;
+pub mod communication;
 pub mod messages;
+pub mod lidar;
 pub mod utils;
-pub mod translator;
+
 
 #[cfg(test)]
-mod tests {
-    use std::{collections::HashMap, sync::Arc};
+mod TestWorkers {
+    use std::{sync::{Arc, Mutex}, thread, time};
+
+    use crate::worker::{Worker, WorkerFactory};
+
+    use super::*;
+
+    struct DummyModule {
+        value: u32
+    }
+
+    impl Module for DummyModule {
+        fn exec_main_task(&self) {
+            println!("EXEC THE TASK OF {}", self.value)
+        }
+    }
+
+    #[test]
+    fn test_simple_workers() {
+        let worker1= Worker::new(Arc::new(DummyModule{value: 1}), "Dummy1", 200, false);
+        let worker2= Worker::new(Arc::new(DummyModule{value: 2}), "Dummy2", 100, false);
+        if let Some(worker_observer) = worker2.clone().get_worker_observer() {
+            worker1.clone().set_next_worker(worker_observer);
+        }
+        while true {
+            thread::sleep(time::Duration::from_micros(100));
+            worker1.try_run();
+        }
+    }
+
+    #[test]
+    fn test_worker_factory() {
+        let mut factory= WorkerFactory::new();
+        let mut factory2= WorkerFactory::new();
+        factory.register_workers(vec![
+            (Arc::new(DummyModule{value: 100}), "Dummy1", 200, true),
+            (Arc::new(DummyModule{value: 200}), "Dummy2", 100, true)
+        ]);
+
+        factory2.register_workers(vec![
+            (Arc::new(DummyModule{value: 6667}), "AsyncDummy1", 2, false),
+            (Arc::new(DummyModule{value: 776}), "AsyncDummy2", 1, false)
+        ]);
+
+        factory.set_workers_link("Dummy1", "Dummy2");
+
+        factory2.set_workers_link("AsyncDummy1", "AsyncDummy2");
+
+        //factory.start_first_workers();
+        
+        while true {
+            thread::sleep(time::Duration::from_micros(100));thread::sleep(time::Duration::from_micros(100));
+            factory2.start_worker("AsyncDummy1");
+        }
+        //factory
+    }
+    
+}
+
+#[cfg(test)]
+mod TestComInterface {
+    use std::{thread, time};
+
+    use crate::{communication::UDPChannel, worker::{self, Worker}};
+ 
+    #[test]
+    fn it_works() {
+        let mut udp1= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 9000);
+        let mut udp2= UDPChannel::new_async("127.0.0.1", 9000, "127.0.0.1", 8080);
+        if let Some(cmd_observer)= udp2.get_cmd_observer() {
+            udp1.add_data_observer(cmd_observer);
+        }
+        let udp_cl= udp2.clone();
+        if let Some(observer)= udp1.get_cmd_observer() {
+            udp2.add_data_observer(observer);
+        }
+        let worker1= Worker::new(udp1, "UDP1", 100, true);
+        let worker2= Worker::new(udp2, "UDP2", 50, true);
+        worker2.run_in_dedicated_thread();
+        
+        worker1.run_in_dedicated_thread();
+        thread::sleep(time::Duration::from_secs(1));
+        udp_cl.clone().publish_message("COUCOU".into());
+        while true {
+            
+            
+        }
+    }
+}
+
+mod TestSerializationDeserialization {
+    use std::collections::HashMap;
 
     use ordered_float::OrderedFloat;
 
-    use crate::{com_channels::{ChannelConfig, UDPChannel}, events_management::Observer, messages::{FeatureMessage, FeatureProperties, LidarMessage, LidarMessageProperties, Translatable}, process::{ModuleLinker, WorkerFactory}, translator::Translator, utils::normalize_angle};
-
-
-    /*#[test]
-    fn sim_lidar() {
-        let lidar_points= 200_f64;
-        let lidar_fov= 180_f64;
-        let offset= 180_f64;
-        for i in 0..lidar_points as i32 {
-            let angle = (-lidar_fov / 2.0).to_radians() + ((i as f64 / (lidar_points-1.0)) * lidar_fov).to_radians() + offset.to_radians();
-            //let angle= (-(lidar_fov/2)as f64).to_radians() + (((i / lidar_points) as f64) * lidar_fov as f64).to_radians();
-            print!( "{}\n", normalize_angle(angle as f32).to_degrees());
-        }
-    }*/
-
-    /*#[test]
-    fn main() {
-        let mut worker_factory= WorkerFactory::default();
-        //Create the UDP Channels / Modules
-        let udp=Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
-                                                                                ModuleLinker::new("UDP1_WORKER".to_string())), 
-                                                                                8090, "127.0.0.1".to_string(), 8080, 5));
-        let udp2=Arc::new(UDPChannel::new(ChannelConfig::new("127.0.0.1".to_string(),
-                                                                                ModuleLinker::new("UDP2_WORKER".to_string())), 
-                                                                                8080, "127.0.0.1".to_string(), 8090, 1));
-        //let udp_cl= udp.clone();
-        let udp2_cl= udp2.clone();
-        //Configure the modules linkers and register the modules(because implement a process) in the worker factory
-        if let Ok(mut linker)= udp.clone().chan_config.linker.try_lock() && let Ok(mut linker2) = udp2.clone().chan_config.linker.try_lock() {
-            //Set the data observers to received the incoming data from the other UDP channel module
-            let udp1_name= linker.get_module_name().clone();
-            linker.set_data_observer(Observer::new(Arc::new(Box::new(move |x| {
-                if let Message::Frame(msg) = x {
-                    if let Ok(data)= String::from_utf8(msg) {
-                        println!("{}= Incoming data {} from {}:{}", udp1_name, data, udp_cl.clone().get_target_address(), udp_cl.clone().get_target_port());
-                    }
-                }
-            }))));
-            let udp2_name= linker2.get_module_name().clone();
-            linker2.set_data_observer(Observer::new(Arc::new(Box::new(move |x| {
-                if let Message::Frame(msg) = x {
-                    if let Ok(data)= String::from_utf8(msg) {
-                        println!("{}= Incoming data {} from {}:{}", udp2_name, data, udp2_cl.clone().get_target_address(), udp2_cl.clone().get_target_port());
-                    }
-                }
-            }))));
-            //Attach the data observers to the other module linker to enable cross-module communication
-            if let Some(udp_obs) = linker.get_data_observer() {
-                linker2.attach_data_observer(udp_obs);
-                
-            }
-            if let Some(udp2_obs) = linker2.get_data_observer() {
-                linker.attach_data_observer(udp2_obs);
-                
-            }
-            //Register the modules in the worker factory with their respective worker frequencies
-            //The factorty can now start and manage the workers for these modules
-            //worker_factory.register_process(linker.get_module_name(), udp.clone(), udp.clone().frequency);
-            worker_factory.register_process(linker2.get_module_name(), udp2.clone(), udp2.clone().frequency);
-        }
-
-        if worker_factory.get_factory_size() > 0 {
-            worker_factory.start_all_process_workers();
-        }
-        let mut prev= std::time::Instant::now();
-        loop {
-            let now= std::time::Instant::now();
-            let elapsed= now.duration_since(prev);
-            if elapsed.as_secs() >= 5 && worker_factory.get_factory_size() > 0 {
-                worker_factory.end_all_process_workers();
-                break;
-            }
-        }
-    }*/
+    use crate::{lidar::LidarMeasurements, messages::{self, Translatable}};
 
     #[test]
-    fn main() {
-        //Define the parsing properties of the features availables in the robot
-        let lidar_properties= LidarMessageProperties{range_id: vec![0x00, 0x0a], measurements_id: vec![0x00, 0x0b]};
-        //The list of messages to send in a single frame
-        let test_msgs:Vec<Box<dyn Translatable>> = Vec::from([
-                                                            Box::new(LidarMessage{properties_ids: lidar_properties.clone(), measurements: HashMap::from([
-                                                                                                                                            (OrderedFloat::from(-90.0 as f32), 5.0 as f32), 
-                                                                                                                                            (OrderedFloat::from(0.0 as f32), 5.0 as f32), 
-                                                                                                                                            (OrderedFloat::from(90.0 as f32), 5.0 as f32),
-                                                                                                                                ])}) as Box<dyn Translatable>,
-                                                            Box::new(LidarMessage{properties_ids: lidar_properties.clone(), measurements: HashMap::from([
+    fn it_works() {
+        let test_msgs:Vec<Box<dyn Translatable>>= vec![
+                                                            Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
+                                                                                                                                (OrderedFloat::from(-90.0 as f32), 10.0 as f32), 
+                                                                                                                                (OrderedFloat::from(0.0 as f32), 2.5 as f32), 
+                                                                                                                                (OrderedFloat::from(90.0 as f32), 5.0 as f32),
+                                                                                                                            ]))),
+                                                            Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
                                                                                                                                             (OrderedFloat::from(45.0 as f32), 10.0 as f32),
                                                                                                                                             (OrderedFloat::from(30.0 as f32), 50.0 as f32),
                                                                                                                                             (OrderedFloat::from(15.0 as f32), 40.0 as f32), 
@@ -105,18 +122,11 @@ mod tests {
                                                                                                                                             (OrderedFloat::from(-15.0 as f32), 10.0 as f32),
                                                                                                                                             (OrderedFloat::from(-30.0 as f32), 50.0 as f32),
                                                                                                                                             (OrderedFloat::from(-45.0 as f32), 40.0 as f32),
-                                                                                                                                ])}) as Box<dyn Translatable>,
-                                                        ]);
-        let translations= HashMap::from([(5 as u16, FeatureProperties::LidarScan(LidarMessageProperties { range_id: vec![0x00, 0x0a], measurements_id: vec![0x00, 0x0b] })),]);
-        let mut translat= Translator::new(vec![0xab, 0xcd], translations);
-        let frame= translat.translate_to_frame(test_msgs);
-        if let Some(messages) = translat.translate_to_messages(frame) {
-            for message in messages {
-                if let Some(msg) = message.downcast_ref::<LidarMessage>() {
-                    println!("{:?}", msg.measurements.clone());
-                }
-            }
-        }
-        
+                                                                                                                                ])))                 
+                                                        ];
+        let frame= messages::convert_to_frame(test_msgs);
+        println!("Frame= {:?}",frame);
+        let translatables= messages::parse_frame(frame);
+        println!("{}", translatables.len())
     }
 }
