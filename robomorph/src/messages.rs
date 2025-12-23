@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use downcast_rs::{Downcast, impl_downcast};
+
 use crate::lidar::LidarMeasurements;
 
 #[derive(Clone)]
@@ -21,11 +23,12 @@ pub enum DataChunk {
 
 
 
-pub trait Translatable  {
+pub trait Translatable : Downcast  {
     fn fill_from_bytes(&mut self, bytes: Vec<u8>) -> usize;
 
     fn to_bytes(&mut self) -> Vec<u8>;
 }
+impl_downcast!(Translatable);
 
 pub fn convert_to_frame(translatables: Vec<Box<dyn Translatable>>) -> Vec<u8> {
     let mut frame= SOF.to_be_bytes().to_vec();

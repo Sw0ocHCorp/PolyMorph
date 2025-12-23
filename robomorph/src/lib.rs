@@ -7,6 +7,27 @@ pub mod messages;
 pub mod lidar;
 pub mod utils;
 
+#[cfg(test)]
+mod TestUtilsFunctions {
+    use crate::utils;
+
+ 
+    #[test]
+    fn it_works() {
+        let tests = [
+            0.0,
+            std::f32::consts::PI / 2.0,
+            std::f32::consts::PI,
+            3.5 * std::f32::consts::PI,
+            -1.0 * std::f32::consts::PI,
+            -2.7 * std::f32::consts::PI,
+        ];
+
+        for &v in &tests {
+            println!("{} -> {}", v, utils::modulo_pi(v));
+        }
+    }
+}
 
 #[cfg(test)]
 mod TestWorkers {
@@ -127,6 +148,45 @@ mod TestSerializationDeserialization {
         let frame= messages::convert_to_frame(test_msgs);
         println!("Frame= {:?}",frame);
         let translatables= messages::parse_frame(frame);
-        println!("{}", translatables.len())
+        for translatable in translatables {
+            println!("TRANSLATABLE: "); 
+            match translatable.downcast_ref::<LidarMeasurements>() {
+                Some(lidar_meas) => {
+                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas.order_by_angle())
+                },
+                None => {
+
+                },
+            }
+        }
+        //println!("{}", translatables.len())
+
+    }
+
+    #[test]
+    fn parse_real_frame() {
+        let test_frame= vec![171, 205, 0, 212, 0, 5, 0, 10, 64, 26, 20, 131, 64, 114, 253, 239, 0, 11, 0, 48, 63, 
+                                        150, 125, 144, 63, 108, 118, 208, 63, 47, 42, 0, 62, 233, 198, 96, 62, 117, 214, 128, 
+                                        61, 11, 123, 0, 190, 37, 243, 64, 190, 178, 149, 96, 191, 6, 210, 96, 191, 31, 146, 224, 
+                                        190, 179, 248, 128, 189, 128, 66, 0, 62, 122, 164, 192, 63, 18, 131, 128, 63, 107, 255, 
+                                        112, 63, 165, 210, 168, 63, 217, 7, 136, 64, 65, 216, 100, 64, 48, 8, 132, 64, 37, 189, 
+                                        244, 64, 32, 65, 248, 64, 30, 148, 236, 64, 32, 108, 252, 64, 38, 22, 128, 64, 48, 136, 
+                                        192, 64, 67, 14, 240, 64, 1, 117, 200, 63, 213, 153, 72, 63, 188, 15, 120, 63, 172, 182, 
+                                        80, 63, 164, 171, 80, 63, 162, 212, 112, 63, 166, 247, 224, 63, 177, 150, 112, 63, 196, 67, 
+                                        64, 63, 227, 60, 48, 64, 17, 2, 36, 192, 43, 88, 202, 64, 69, 255, 32, 64, 39, 144, 76, 64, 
+                                        11, 63, 140, 63, 225, 179, 16, 63, 176, 98, 136, 63, 130, 62, 56, 63, 113, 213, 96, 63, 220, 
+                                        242, 184, 64, 38, 217, 192, 192, 43, 67, 178];
+        let translatables= messages::parse_frame(test_frame);
+        for translatable in translatables {
+            println!("TRANSLATABLE: "); 
+            match translatable.downcast_ref::<LidarMeasurements>() {
+                Some(lidar_meas) => {
+                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas.order_by_angle())
+                },
+                None => {
+
+                },
+            }
+        }
     }
 }

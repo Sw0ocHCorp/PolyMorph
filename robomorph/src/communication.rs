@@ -56,8 +56,10 @@ impl UDPChannel {
     }
 
     pub fn publish_message(&self, msg: Vec<u8>) {
-        if let Ok(msg_event) = self.frame_event.try_lock() {
-            msg_event.trig(msg);
+        if let Ok(cmd_observer) = self.cmd_observer.try_lock() {
+            if let Some(observer) = cmd_observer.as_ref() {
+                observer.put_data_in_buffer(msg);
+            }
         }
     }
 
@@ -95,9 +97,9 @@ impl Channel for UDPChannel {
                     Some(sock) => {
                         if let Err(_)= sock.send_to(&msg, format!("{}:{}", self.target_addr.clone(), self.target_port.clone())) {
                             println!("ERROR: Failed to send message");
-                        } else {
+                        } /*else {
                             println!("{}:{} -> Send: {:?} To {}:{}", self.addr.clone(), self.port.clone(), String::from_utf8(msg), self.target_addr.clone(), self.target_port.clone());
-                        }
+                        }*/
                     },
                     //IF socket is None, it means the interface is not connected
                     None => {
@@ -133,7 +135,15 @@ impl Channel for UDPChannel {
                         match sock.recv_from(&mut buf) {
                             //IF frame is received, return it
                             Ok((bytes_received, src_addr)) => {
-                                println!("{}:{} -> Received {:?} from {}:{}", self.addr.clone(), self.port.clone(), String::from_utf8(buf[..bytes_received].to_vec()), src_addr.ip().to_string(), src_addr.port());    
+                               //println!("Received Data");
+                                /*match String::from_utf8(buf[..bytes_received].to_vec()) {
+                                    Ok(utf8_frame) => {
+                                        println!("{}:{} -> Received {:?} from {}:{}", self.addr.clone(), self.port.clone(), utf8_frame, src_addr.ip().to_string(), src_addr.port());    
+                                    },
+                                    Err(_) => {
+                                        println!("{}:{} -> Received {:?} from {}:{}", self.addr.clone(), self.port.clone(), buf[..bytes_received].to_vec(), src_addr.ip().to_string(), src_addr.port());    
+                                    },
+                                }*/
                                 return Ok(buf[..bytes_received].to_vec())
                             },
                             //IF there is error, return the error /!\WARNING: No incoming frame trigger error WouldBlock (because socket is set in non blocking mode)

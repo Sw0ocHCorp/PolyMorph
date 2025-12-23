@@ -1,11 +1,15 @@
 use core::time;
-use std::{ sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant, SystemTime}};
+use std::{ any::Any, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant, SystemTime}};
+
+use downcast_rs::{Downcast, impl_downcast};
 
 use crate::{event_management::{Event, Observer}, worker};
 
-pub trait Module : Send + Sync {
+pub trait Module : Downcast + Send + Sync {
     fn exec_main_task(&self);
+
 }
+impl_downcast!(Module);
 
 /**  A Worker is the spaceship of a Module
  * It implement and perform the common behavior of all Worker Module (timed task execution in main / dedicated thread)
@@ -62,7 +66,8 @@ impl Worker {
         return worker;
     }
     //Function to try running a task execution
-    pub fn try_run(&self) {
+    pub fn try_run(&self) -> bool{
+        let mut is_executed= false;
         //IF a frequency is specified 
         if self.frequency > 0 {
             if let Ok(mut trig_time)= self.trig_time.try_lock() {
@@ -71,6 +76,7 @@ impl Worker {
                 if now >= *trig_time {
                     //Compute the next trig time
                     if let Some(new_trig_time) = trig_time.checked_add(Duration::from_millis((1000 / self.frequency) as u64)) {
+                        is_executed= true;
                         //print!("NEW TRIG TIME => {} ", new_trig_time.duration_since(now).as_millis());
                         self.module.clone().exec_main_task();
                         if let Ok(next_worker_event)= self.next_worker_event.try_lock() {
@@ -83,8 +89,10 @@ impl Worker {
         } 
         //ELSE, no frequency is set, try_run execute force the execution of the module main task
         else {
+            is_executed= true;
             self.force_run();
         }
+        return is_executed;
     }
 
     pub fn force_run(&self) {
@@ -179,6 +187,14 @@ impl Worker {
             },
         }
     }
+
+    pub fn get_module(&self) -> Arc<dyn Module> {
+        return self.module.clone();
+    }
+
+    /*pub fn get_module(&self) -> &dyn Module {
+        return self.get_module().clone().as_concrete();
+    }*/
 }
 
 pub struct WorkerFactory {

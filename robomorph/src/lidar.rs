@@ -30,8 +30,9 @@ impl LidarMeasurements {
         self.measurements.insert(OrderedFloat(angle), distance);
     }
 
-    pub fn order_by_angle(&mut self) -> HashMap<OrderedFloat<f32>, f32> {
+    pub fn order_by_angle(&self) -> HashMap<OrderedFloat<f32>, f32> {
         let mut angles: Vec<_> = self.measurements.keys().cloned().collect();
+        angles.sort();
         let mut new_mes:HashMap<OrderedFloat<f32>, f32>= HashMap::new();
         let mes= self.measurements.clone();
         for angle in angles {
@@ -108,23 +109,23 @@ impl Translatable for LidarMeasurements {
     fn to_bytes(&mut self) -> Vec<u8> {
         let mut frame:Vec<u8>= (DataChunk::LIDAR_SCAN_CHUNK as u16).to_be_bytes().to_vec();
         //Let 2 bytes for the frame size
-        frame.append(&mut (0 as u16).to_be_bytes().to_vec());
+        //frame.append(&mut (0 as u16).to_be_bytes().to_vec());
         frame.append(&mut LIDAR_ANGLE_RANGE.to_be_bytes().to_vec());
         let mut angles: Vec<_>= self.measurements.keys().cloned().collect();
         angles.sort();
-        let first_angle= angles[0];
+        let first_angle= utils::modulo_2pi(angles[0].into_inner());
         
-        let last_angle = angles[angles.len()-1];
-        frame.append(&mut f32::to_be_bytes(first_angle.into_inner()).to_vec());
-        frame.append(&mut f32::to_be_bytes(last_angle.into_inner()).to_vec());
+        let last_angle = utils::modulo_2pi(angles[angles.len()-1].into_inner());
+        frame.append(&mut f32::to_be_bytes(first_angle).to_vec());
+        frame.append(&mut f32::to_be_bytes(last_angle).to_vec());
         frame.append(&mut LIDAR_MEASUREMENT.to_be_bytes().to_vec());
         frame.append(&mut u16::to_be_bytes(angles.len() as u16).to_vec());
         for angle in angles {
-            frame.append(&mut f32::to_be_bytes(self.measurements[&angle]).to_vec());
+            frame.append(&mut f32::to_be_bytes(utils::modulo_pi(self.measurements[&angle])).to_vec());
         }
         let frame_size= u16::to_be_bytes(frame.len() as u16);
-        frame[2]= frame_size[0];
-        frame[3]= frame_size[1];
+        //frame[2]= frame_size[0];
+        //frame[3]= frame_size[1];
         return frame;
     }
 }

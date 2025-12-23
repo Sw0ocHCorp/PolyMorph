@@ -1,3 +1,6 @@
+use std::f32::consts::PI;
+
+
 pub fn contain_bytes(src_bytes: Vec<u8>, target_bytes: Vec<u8>) -> i128{
     let mut start_index= -1;
     if src_bytes.len() >= target_bytes.len() {
@@ -13,4 +16,36 @@ pub fn contain_bytes(src_bytes: Vec<u8>, target_bytes: Vec<u8>) -> i128{
         }
     }
     return start_index;
+}
+
+pub fn modulo_2pi(x: f32) -> f32 {
+    return x.rem_euclid(PI*2.0);
+}
+
+pub fn modulo_pi(x: f32) -> f32 {
+    // Use rem_euclid to do a mod in [0, 2π)
+    let m = modulo_2pi(x);
+
+    // Shift range from [0, 2π) to [-π, π)
+    if m >= PI {
+        m - PI*2.0
+    } else {
+        m
+    }
+}
+
+pub fn modulo_2pi_f64(x: f64) -> f64 {
+    return x.rem_euclid(std::f64::consts::PI*2.0);
+}
+
+pub fn modulo_pi_f64(x: f64) -> f64 {
+    // Use rem_euclid to do a mod in [0, 2π)
+    let m = modulo_2pi_f64(x);
+
+    // Shift range from [0, 2π) to [-π, π)
+    if m >= std::f64::consts::PI {
+        m - std::f64::consts::PI*2.0
+    } else {
+        m
+    }
 }
