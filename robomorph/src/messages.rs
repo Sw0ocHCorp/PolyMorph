@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 
 use downcast_rs::{Downcast, impl_downcast};
 
@@ -22,8 +23,7 @@ pub enum DataChunk {
 } 
 
 
-
-pub trait Translatable : Downcast  {
+pub trait Translatable : Debug + Downcast {
     fn fill_from_bytes(&mut self, bytes: Vec<u8>) -> usize;
 
     fn to_bytes(&mut self) -> Vec<u8>;
@@ -65,7 +65,7 @@ pub fn parse_frame(frame: Vec<u8>) -> Vec<Box<dyn Translatable>> {
                         }
                         else {
                             if u16::from_be_bytes([*hi, *lo]) == DataChunk::LIDAR_SCAN_CHUNK as u16 {
-                                let mut lidar_measurements= LidarMeasurements::new();
+                                let mut lidar_measurements= LidarMeasurements::new(false);
                                 let chunk_size= lidar_measurements.fill_from_bytes(frame[i+1..].to_vec());
                                 translatables.push(Box::new(lidar_measurements));
                                 //let chunk_size= LidarMeasurements::new_from_bytes(frame[i+1..].to_vec());

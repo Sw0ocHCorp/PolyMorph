@@ -76,23 +76,23 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No lidarRelativeMidAngle metadata exist.\nYou should add a metadata called \"lidarFov\" with int as type");
             self.lidar_angle_offset= 0 as f64;
         }
-        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", 1, false))
+        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", 50, false))
     }
     
 
     fn process(&mut self, delta: f64) {
         //godot_print!("{}\n", delta);
         //Detect the collision point between the raycast and the rigidBodies in the scene
-        let mut measurements= LidarMeasurements::new();
+        let mut measurements= LidarMeasurements::new(true);
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
 
             for i in 0..self.lidar_points{
                 //let mut base_angle= (-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1.0)) * self.lidar_fov);
-                let mut base_angle = (-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1) as f64) * self.lidar_fov) + self.lidar_angle_offset;
-                let angle= utils::modulo_2pi_f64(base_angle);
-                //godot_print!("ANGLE | BASE= {} | CLAMP= {}", base_angle.to_degrees(), angle.to_degrees());
+                let angle = utils::modulo_pi_f64((-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1) as f64) * self.lidar_fov) + self.lidar_angle_offset);
+                //let angle= utils::modulo_2pi_f64(base_angle);
+                //godot_print!("ANGLE {}", angle.to_degrees());
                 //IF the scene exist
                 if let Some(mut world)= self.base().get_world_3d() {
                     //IF the space_state (to test raycast) exist
@@ -102,7 +102,7 @@ impl INode3D for AutonomyNode{
                             //Get the position of the parent
                             let origin= parent.get_global_position();
                             // generate a raycast of 50m with the specific angle
-                            let mut raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: origin.x + 50.0*cos(angle) as f32, y: 0.5, z: origin.z + 50.0*sin(angle) as f32});
+                            let mut raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: 50.0*cos(utils::modulo_pi_f64(-angle)) as f32, y: 0.5, z: 50.0*sin(utils::modulo_pi_f64(-angle)) as f32});
                             //Get the collision of the raycast and Rigidbodies of in the scene
                             let collision= space_state.intersect_ray(raycast.as_ref());
                             //MATCH: there is a collider position? (means there is a collision with a RigidBody?)
@@ -113,11 +113,16 @@ impl INode3D for AutonomyNode{
                                         Ok(pos) => {
                                             //Add the distance with the rigidbody in the list, keyed by angle
                                             let distance = origin.distance_to(pos);
-                                            //godot_print!("Distance at angle {}° => {}", angle.to_degrees(), distance);
+                                            //godot_print!("Distance at angle {}rad {}° => {}", angle, angle.to_degrees(), distance);
                                             if distance < 0.0 {
                                                 godot_print!("Error: Negative distance detected");
                                             }
-                                            measurements.insert(angle as f32, distance);
+                                            let tamere= measurements.len();
+                                            measurements.insert(angle.to_degrees() as f32, distance);
+                                            let lapute= measurements.len();
+                                            if tamere == lapute {
+                                                godot_print!("Error: Measurement at angle {}rad {}° not inserted", angle, angle.to_degrees());
+                                            }
                                             //measurements.push(origin.distance_to(pos));
                                         },
                                         Err(_) => {
@@ -136,15 +141,42 @@ impl INode3D for AutonomyNode{
                     }
                 }    
             }
+            /*if measurements.len() != 1000 {
+                godot_print!("Warning:");
+                godot_print!("=======================\n");
+            }*/
+            //godot_print!("=======================\n");
         }
         //IF the UDP module exist
         if let Some(udp_worker)= &self.udp_worker {
             if measurements.len() > 0 {
                 if udp_worker.try_run() {
-                    godot_print!("SEND DATA\n");
                     match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                         Some(udp) => {
-                            udp.publish_message(messages::convert_to_frame(vec![Box::new(measurements)]));//measurements.to_bytes());
+                            /*godot_print!("=======================\n");
+                            godot_print!("LIDAR MEASUREMENTS SENT: {:?}\n", measurements);
+                            godot_print!("=======================\n");*/
+                            
+                            let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                            //godot_print!("Frame generated {:?}\n", frame);
+                            //godot_print!("Frame bytes: {:?}\n", frame);
+                            udp.publish_message(frame.clone());//measurements.to_bytes());
+                            godot_print!("SEND DATA\n");
+                            /*let translatables= messages::parse_frame(frame.clone());
+                            let mut i= 0;
+                            for translatable in translatables {
+                                godot_print!("Translatable {}\n", i);
+                                i+= 1;
+                                match translatable.downcast_ref::<LidarMeasurements>() {
+                                    Some(lidar_meas) => {
+                                        godot_print!("LIDAR MEASUREMENTS: {:?}\n", lidar_meas.order_by_angle())
+                                    },
+                                    None => {
+
+                                    },
+                                }
+                                //println!("MailBox Loopback received: {:?}", translatable);
+                            }*/
                         },
                         None => {
 
@@ -154,17 +186,6 @@ impl INode3D for AutonomyNode{
             }
             //udp.exec_main_task();
         }
-        /*if let Some(udp) = &self.udp {
-            //IF there is measurements
-            if let Some(udp) = self.udp.clone() {
-                if measurements.len() > 0 {
-                    udp.publish_message(measurements.to_bytes());
-                }
-                udp.exec_main_task();
-            }
-        } else {
-            let a= 1;
-        }*/
     }
 
     fn exit_tree(&mut self) {

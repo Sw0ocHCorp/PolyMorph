@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use robomorph::{communication::UDPChannel, event_management::{Event, Observer}, lidar::LidarPerceptionManager, worker::{Module, WorkerFactory}};
+use robomorph::{communication::UDPChannel, event_management::{Event, Observer}, lidar::{LidarMeasurements, LidarPerceptionManager}, messages, worker::{Module, WorkerFactory}};
 
 pub struct MailBox {
     frame_observer: Mutex<Option<Observer<Vec<u8>>>>,
@@ -29,6 +29,21 @@ impl MailBox {
 
     pub fn send_loopback(&self, frame: Vec<u8>) {
         if let Ok(loopback_event) = self.loopback_event.try_lock() {
+            /*let translatables= messages::parse_frame(frame.clone());
+            let mut i= 0;
+            for translatable in translatables {
+                println!("Translatable {}", i);
+                i+= 1;
+                match translatable.downcast_ref::<LidarMeasurements>() {
+                    Some(lidar_meas) => {
+                        println!("LIDAR MEASUREMENTS: {:?}", lidar_meas.order_by_angle())
+                    },
+                    None => {
+
+                    },
+                }
+                //println!("MailBox Loopback received: {:?}", translatable);
+            }*/
             loopback_event.trig(frame);
         }
     }

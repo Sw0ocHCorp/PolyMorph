@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://bdey3wykb1poq"]
+[gd_scene load_steps=19 format=3 uid="uid://bdey3wykb1poq"]
 
 [sub_resource type="Environment" id="Environment_ii0s2"]
 
@@ -33,6 +33,14 @@ albedo_color = Color(0.30089447, 0.6537743, 0.36353767, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_8xs5q"]
 
+[sub_resource type="CylinderMesh" id="CylinderMesh_5blw1"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_8xs5q"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_5blw1"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_8xs5q"]
+
 [node name="Node3D" type="Node3D"]
 
 [node name="OmniLight3D" type="OmniLight3D" parent="."]
@@ -41,7 +49,7 @@ omni_range = 4096.0
 omni_attenuation = -0.1
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(-4.371139e-08, 0.7071068, -0.7071068, 0, 0.7071068, 0.7071068, 1, 3.090862e-08, -3.090862e-08, -2.0267467, 6, 0)
+transform = Transform3D(-4.371139e-08, 0.7071068, -0.7071068, 0, 0.7071068, 0.7071068, 1, 3.090862e-08, -3.090862e-08, -6.813048, 7.511468, 0)
 environment = SubResource("Environment_ii0s2")
 fov = 100.0
 
@@ -62,9 +70,9 @@ debug_color = Color(0.6117647, 0.3882353, 0.9490196, 1)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
 
 [node name="AutonomyNode" type="AutonomyNode" parent="Robot"]
-metadata/lidarPoints = 200
-metadata/lidarFov = 180
-metadata/lidarRelativeMidAngle = 180
+metadata/lidarPoints = 500
+metadata/lidarFov = 360
+metadata/lidarRelativeMidAngle = 0
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.0003733635, 0, 0)
@@ -269,7 +277,7 @@ skeleton = NodePath("../../StaticBody3D/Donut")
 surface_material_override/0 = SubResource("StandardMaterial3D_diffx")
 
 [node name="StaticBody3D20" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -11.704, 1.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.961756, 1.5, 0)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D20"]
 transform = Transform3D(1, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0)
@@ -279,3 +287,27 @@ mesh = SubResource("BoxMesh_5blw1")
 transform = Transform3D(1, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0)
 shape = SubResource("BoxShape3D_8xs5q")
 debug_color = Color(0.8745098, 0, 0.8392157, 1)
+
+[node name="StaticBody3D21" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.594, 2, -9.840619)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D21"]
+transform = Transform3D(1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("CylinderMesh_5blw1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D21"]
+transform = Transform3D(1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0)
+shape = SubResource("CylinderShape3D_8xs5q")
+debug_color = Color(0, 0.6, 0.69803923, 1)
+
+[node name="StaticBody3D22" type="StaticBody3D" parent="."]
+transform = Transform3D(-7.983238e-08, -1.8263518, 0.8151314, 2, -8.742278e-08, 7.57072e-15, 3.5630524e-08, 0.8151314, 1.8263518, -4.086158, 1.023506, 3.8646646)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D22"]
+transform = Transform3D(1, -2.6645353e-15, 1.7763568e-15, -4.440892e-16, 2, 0, 0, 0, 1, 0, -0.2768836, 0.12357783)
+mesh = SubResource("CapsuleMesh_5blw1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D22"]
+transform = Transform3D(1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0)
+shape = SubResource("CapsuleShape3D_8xs5q")
+debug_color = Color(0, 0.6, 0.69803923, 1)

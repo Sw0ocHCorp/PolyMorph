@@ -125,7 +125,7 @@ impl Channel for UDPChannel {
     }
 
     fn listen_for_frame(&self)  -> Result<Vec<u8>, io::Error> {
-        let mut buf = [0; 1024];
+        let mut buf = [0; 4096];
         match self.socket.clone().try_lock() {
             //IF socket mutex is availabe, take it to be able to listen for incoming frame
             Ok(socket) => {
