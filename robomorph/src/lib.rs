@@ -130,20 +130,8 @@ mod TestSerializationDeserialization {
     #[test]
     fn it_works() {
         let test_msgs:Vec<Box<dyn Translatable>>= vec![
-                                                            Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
-                                                                                                                                (OrderedFloat::from((-90.0 as f32).to_radians()), 10.0 as f32), 
-                                                                                                                                (OrderedFloat::from((0.0 as f32).to_radians()), 2.5 as f32), 
-                                                                                                                                (OrderedFloat::from((90.0 as f32).to_radians()), 5.0 as f32),
-                                                                                                                            ]))),
-                                                            /*Box::new(LidarMeasurements::new_from_measurements(HashMap::from([
-                                                                                                                                            (OrderedFloat::from(45.0 as f32), 10.0 as f32),
-                                                                                                                                            (OrderedFloat::from(30.0 as f32), 50.0 as f32),
-                                                                                                                                            (OrderedFloat::from(15.0 as f32), 40.0 as f32), 
-                                                                                                                                            (OrderedFloat::from(0.0 as f32), 5.0 as f32), 
-                                                                                                                                            (OrderedFloat::from(-15.0 as f32), 10.0 as f32),
-                                                                                                                                            (OrderedFloat::from(-30.0 as f32), 50.0 as f32),
-                                                                                                                                            (OrderedFloat::from(-45.0 as f32), 40.0 as f32),
-                                                                                                                                ])))  */               
+                                                            Box::new(LidarMeasurements::new_from_measurements(vec![-90.0, 0.0, 90.0], vec![10.0, 2.5, 5.0], true)),
+                                                            Box::new(LidarMeasurements::new_from_measurements(vec![-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0], vec![10.0, 50.0, 40.0, 5.0, 10.0, 50.0, 40.0], true))             
                                                         ];
         let frame= messages::convert_to_frame(test_msgs);
         println!("Frame= {:?}",frame);
@@ -152,7 +140,7 @@ mod TestSerializationDeserialization {
             println!("TRANSLATABLE: "); 
             match translatable.downcast_ref::<LidarMeasurements>() {
                 Some(lidar_meas) => {
-                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas.order_by_angle())
+                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas)
                 },
                 None => {
 
@@ -198,7 +186,7 @@ mod TestSerializationDeserialization {
             println!("TRANSLATABLE: "); 
             match translatable.downcast_ref::<LidarMeasurements>() {
                 Some(lidar_meas) => {
-                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas.order_by_angle())
+                    println!("LIDAR MEASUREMENTS: {:?}", lidar_meas)
                 },
                 None => {
 
