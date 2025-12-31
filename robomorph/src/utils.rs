@@ -49,3 +49,17 @@ pub fn modulo_pi_f64(x: f64) -> f64 {
         m
     }
 }
+
+pub fn euclidean_distance(pt1: Vec<f32>, pt2: Vec<f32>) -> f32 {
+    if pt1.len() == pt2.len() {
+        let mut cumul= 0.0;
+        for i in 0..pt1.len() {
+            cumul += (pt2[i] - pt1[i]).powf(2.0);
+        }
+        return cumul.sqrt();
+    } else {
+        println!("Points must have the same dimension");
+        return -1.0;
+    }
+
+}

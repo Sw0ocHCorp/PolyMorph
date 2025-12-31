@@ -3,7 +3,8 @@ use std::fmt::Debug;
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::lidar::LidarMeasurements;
+use crate::lidar_management::measurements::LidarMeasurements;
+use crate::lidar_management::{self};
 
 #[derive(Clone)]
 pub enum ParsingState {

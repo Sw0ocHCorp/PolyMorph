@@ -63,7 +63,7 @@ impl UDPChannel {
         }
     }
 
-    pub fn add_data_observer(&self, data_observer: Observer<Vec<u8>>) {
+    pub fn add_frame_observer(&self, data_observer: Observer<Vec<u8>>) {
         if let Ok(mut frame_event)= self.frame_event.try_lock() {
             frame_event.plug_observer(data_observer);
         }

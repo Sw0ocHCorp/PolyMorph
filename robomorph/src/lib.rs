@@ -4,7 +4,7 @@ pub mod event_management;
 pub mod worker;
 pub mod communication;
 pub mod messages;
-pub mod lidar;
+pub mod lidar_management;
 pub mod utils;
 
 #[cfg(test)]
@@ -100,11 +100,11 @@ mod TestComInterface {
         let mut udp1= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 9000);
         let mut udp2= UDPChannel::new_async("127.0.0.1", 9000, "127.0.0.1", 8080);
         if let Some(cmd_observer)= udp2.get_cmd_observer() {
-            udp1.add_data_observer(cmd_observer);
+            udp1.add_frame_observer(cmd_observer);
         }
         let udp_cl= udp2.clone();
         if let Some(observer)= udp1.get_cmd_observer() {
-            udp2.add_data_observer(observer);
+            udp2.add_frame_observer(observer);
         }
         let worker1= Worker::new(udp1, "UDP1", 100, true);
         let worker2= Worker::new(udp2, "UDP2", 50, true);
@@ -125,7 +125,7 @@ mod TestSerializationDeserialization {
 
     use ordered_float::OrderedFloat;
 
-    use crate::{lidar::LidarMeasurements, messages::{self, Translatable}};
+    use crate::{lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}};
 
     #[test]
     fn it_works() {

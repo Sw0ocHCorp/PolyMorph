@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 
-use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, cos, sin}, prelude::*};
+use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, lidar::LidarMeasurements, messages::{self, Translatable}, utils, worker::{Module, Worker}};
+use robomorph::{communication::UDPChannel, lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}, utils, worker::{Module, Worker}};
 
 
 #[derive(GodotClass)]
@@ -93,6 +93,7 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No motionFactor metadata exist.\nYou should add a metadata called \"motionFactor\" with float as type");
             self.motion_factor= 1.0;
         }
+        
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", 50, false))
     }
 
@@ -146,9 +147,9 @@ impl INode3D for AutonomyNode{
                 Ok(mut robot) => {
                     let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
                     let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };
-                    godot_print!("Applying translation and relative rotation to robot:\n");
+                    //godot_print!("Applying translation and relative rotation to robot:\n");
                     //godot_print!("Translation= {:?}\n", translation);
-                    godot_print!("Relative Rotation= {:?}\n", relative_rotation);
+                    //godot_print!("Relative Rotation= {:?}\n", relative_rotation);
                     //robot.set_linear_velocity(translation);
                     //robot.apply_force(force);
                     robot.set_angular_velocity(relative_rotation);
@@ -204,18 +205,11 @@ impl INode3D for AutonomyNode{
                                 None => {
 
                                 }
-                                    //Return non-sense value to indicate no collision with RigidBody
-                                    //measurements.push(-1.0),
                             }
                         }
                     }
                 }    
             }
-            /*if measurements.len() != 1000 {
-                godot_print!("Warning:");
-                godot_print!("=======================\n");
-            }*/
-            //godot_print!("=======================\n");
         }
         //IF the UDP module exist
         if let Some(udp_worker)= &self.udp_worker {
@@ -223,10 +217,6 @@ impl INode3D for AutonomyNode{
                 if udp_worker.try_run() {
                     match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                         Some(udp) => {
-                            /*godot_print!("=======================\n");
-                            godot_print!("LIDAR MEASUREMENTS SENT: {:?}\n", measurements);
-                            godot_print!("=======================\n");*/
-                            
                             let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
                             //godot_print!("Frame generated {:?}\n", frame);
                             //godot_print!("Frame bytes: {:?}\n", frame);

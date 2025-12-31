@@ -67,13 +67,14 @@ shape = SubResource("BoxShape3D_yrb85")
 debug_color = Color(0.6117647, 0.3882353, 0.9490196, 1)
 
 [node name="Robot" type="RigidBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+transform = Transform3D(0.31182078, 0, 0.9501408, 0, 1, 0, -0.9501408, 0, 0.31182078, 0, 1, 0)
 
 [node name="AutonomyNode" type="AutonomyNode" parent="Robot"]
-metadata/lidarPoints = 500
+metadata/lidarPoints = 750
 metadata/lidarFov = 180
-metadata/lidarRelativeMidAngle = 0
 metadata/motionFactor = 3.0
+metadata/maxNoiseDistance = 0.0
+metadata/lidarAngleOffset = 0.0
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.0003733635, 0, 0)
@@ -302,10 +303,10 @@ shape = SubResource("CylinderShape3D_8xs5q")
 debug_color = Color(0, 0.6, 0.69803923, 1)
 
 [node name="StaticBody3D22" type="StaticBody3D" parent="."]
-transform = Transform3D(-7.983238e-08, -1.8263518, 0.8151314, 2, -8.742278e-08, 7.57072e-15, 3.5630524e-08, 0.8151314, 1.8263518, -4.086158, 1.023506, 3.8646646)
+transform = Transform3D(-7.983238e-08, -1.8263518, 0.8151314, 2, -8.742278e-08, 7.57072e-15, 3.5630524e-08, 0.8151314, 1.8263518, -5.3073187, 1.023506, 5.151633)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D22"]
-transform = Transform3D(1, -2.6645353e-15, 1.7763568e-15, -4.440892e-16, 2, 0, 0, 0, 1, 0, -0.2768836, 0.12357783)
+transform = Transform3D(1, -2.6645353e-15, 1.7763568e-15, -4.440892e-16, 2, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CapsuleMesh_5blw1")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D22"]
