@@ -76,7 +76,7 @@ impl<T:Clone + Send + Sync + 'static> Event<T> {
                     buffer.push_back(data.clone());
                 }
             } else {
-                if let Some(mut clbk) = observer.callback.clone() {
+                if let Some(clbk) = observer.callback.clone() {
                     if let Ok(mut callback)= clbk.clone().try_lock() {
                         callback(data.clone());
                     }

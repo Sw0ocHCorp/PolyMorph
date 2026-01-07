@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}, utils, worker::{Module, Worker}};
+use robomorph::{communication::UDPChannel, lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}, positionning::pose::IMUData, utils, worker::{Module, Worker}};
 
 
 #[derive(GodotClass)]
@@ -16,6 +16,9 @@ pub struct AutonomyNode {
     lidar_angle_offset: f64,
     motion_command: [f32; 2],
     motion_factor: f32,
+    last_linear_vel: Vector3,
+    world_magnetic_field: Vector3,
+    data_fps: u32
 }
 #[godot_api]
 /**
@@ -26,6 +29,7 @@ impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
         //let test= vec![]
+        self.world_magnetic_field= Vector3 { x: 1.0, y: 0.0, z: 0.0 };
         let udp= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090);
         //Get and store the metadata of the 
         if self.base().has_meta("lidarPoints") {
@@ -93,8 +97,22 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No motionFactor metadata exist.\nYou should add a metadata called \"motionFactor\" with float as type");
             self.motion_factor= 1.0;
         }
-        
-        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", 50, false))
+        if self.base().has_meta("dataFrequency") {
+            match self.base().get_meta("dataFrequency").try_to::<u32>() {
+                Ok(data_frequency) => {
+                    self.data_fps= data_frequency;
+                    godot_print!("Loading dataFrequency metadata succesful, It's value is= {}", data_frequency);
+                },
+                Err(_) => {
+                    godot_print!("/!\\ ERROR: dataFrequency conversion in f32 failed.\nYou should change the metadata type in u32");
+                    self.data_fps= 10;
+                },
+            } 
+        } else {
+            godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
+            self.data_fps= 10;
+        }
+        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false))
     }
 
     fn input(&mut self, event: Gd < InputEvent >,) {
@@ -112,7 +130,8 @@ impl INode3D for AutonomyNode{
         }
         match event.clone().try_cast::<InputEventJoypadMotion>() {
             Ok(joypad_event) => {
-                if let value= joypad_event.get_axis_value() && value.abs() > 0.2 {
+                let value= joypad_event.get_axis_value();
+                if value.abs() > 0.2 {
                     if joypad_event.get_axis() == JoyAxis::LEFT_X {
                         self.motion_command[1]= -value;
                     } 
@@ -125,6 +144,9 @@ impl INode3D for AutonomyNode{
                     if joypad_event.get_axis() == JoyAxis::RIGHT_Y {
                         self.motion_command[0]= value;
                     }
+
+                } else {
+                    self.motion_command= [0.0, 0.0];
                 }
                 //godot_print!("Joypad motion detected: {:?} {}\n", joypad_event.get_axis(), joypad_event.get_axis_value());
             },
@@ -138,114 +160,139 @@ impl INode3D for AutonomyNode{
         //godot_print!("Motion command: {:?}\n", self.motion_command);
         //godot_print!("{}\n", delta);
         //Detect the collision point between the raycast and the rigidBodies in the scene
+        //let mut imu_measurements= IMUData
         let mut measurements= LidarMeasurements::new(true);
+        let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
             match parent_obj.clone().try_cast::<RigidBody3D>() {
                 Ok(mut robot) => {
-                    let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
+                    // 1. Calculate Linear Acceleration in Godot World Space
+                    // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
+                    let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
+                    self.last_linear_vel = robot.get_linear_velocity();
+
+                    // 2. Get Rotation and Angular Velocity
+                    let robot_q = robot.get_quaternion();
+                    let godot_angular_vel = robot.get_angular_velocity();
+
+                    // 3. Bring World Vectors into the Robot's Local Body Frame
+                    // Godot's '*' operator for Quaternions/Vectors handles the rotation.
+                    let local_accel = robot_q.inverse() * godot_linear_accel;
+                    let local_mag   = robot_q.inverse() * self.world_magnetic_field;
+                    let local_gyro  = robot_q.inverse() * godot_angular_vel; // If angular_vel is in world coords
+
+                    // 4. Map Godot (Y-Up) to IMU (Z-Up) Convention
+                    // Godot X -> IMU X (Forward)
+                    // Godot Y -> IMU Z (Up)
+                    // Godot -Z -> IMU Y (Left) - This maintains a Right-Handed System
+                    imu_data = IMUData {
+                        accel: [
+                            local_accel.x, 
+                            -local_accel.z, 
+                            local_accel.y
+                        ], 
+                        gyro: [
+                            local_gyro.x, 
+                            -local_gyro.z, 
+                            local_gyro.y
+                        ],
+                        magnetic_field: [
+                            local_mag.x, 
+                            -local_mag.z, 
+                            local_mag.y
+                        ]
+                    };
+                    //godot_print!("IMU Data:\n{:?}", imu_data);
+                    //Compute the velocities to apply to the robot from the joystick input
+                    //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
                     let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };
-                    //godot_print!("Applying translation and relative rotation to robot:\n");
-                    //godot_print!("Translation= {:?}\n", translation);
-                    //godot_print!("Relative Rotation= {:?}\n", relative_rotation);
+                    
+                    //Applying the velocity computed from the joystick input
                     //robot.set_linear_velocity(translation);
-                    //robot.apply_force(force);
                     robot.set_angular_velocity(relative_rotation);
                     angle_offset += robot.get_global_rotation().y as f64;
-                },
-                Err(_) => {
 
-                },
-            }
-            for i in 0..self.lidar_points{
-                //let mut base_angle= (-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1.0)) * self.lidar_fov);
-                let angle = utils::modulo_pi_f64((-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1) as f64) * self.lidar_fov));
-                //let angle= utils::modulo_2pi_f64(base_angle);
-                //godot_print!("ANGLE {}", angle.to_degrees());
-                //IF the scene exist
-                if let Some(mut world)= self.base().get_world_3d() {
-                    //IF the space_state (to test raycast) exist
-                    if let Some(mut space_state)= world.get_direct_space_state(){
-                        //If the parent is a Node3D
-                        if let Ok(parent)= parent_obj.clone().try_cast::<Node3D>() {
-                            //Get the position of the parent
-                            let origin= parent.get_global_position();
-                            // generate a raycast of 50m with the specific angle
-                            let mut raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: 50.0*cos(utils::modulo_pi_f64(-(angle + angle_offset))) as f32, y: 0.5, z: 50.0*sin(utils::modulo_pi_f64(-(angle+ angle_offset))) as f32});
-                            //Get the collision of the raycast and Rigidbodies of in the scene
-                            let collision= space_state.intersect_ray(raycast.as_ref());
-                            //MATCH: there is a collider position? (means there is a collision with a RigidBody?)
-                            match collision.get("position") {
-                                //There is a collision with a RigidBody
-                                Some(pos_variant) => {
-                                    match pos_variant.try_to::<Vector3>() {
-                                        Ok(pos) => {
-                                            //Add the distance with the rigidbody in the list, keyed by angle
-                                            let distance = origin.distance_to(pos);
-                                            //godot_print!("Distance at angle {}rad {}° => {}", angle, angle.to_degrees(), distance);
-                                            if distance < 0.0 {
-                                                godot_print!("Error: Negative distance detected");
+                    for i in 0..self.lidar_points{
+                        //let mut base_angle= (-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1.0)) * self.lidar_fov);
+                        let angle = utils::modulo_pi_f64((-self.lidar_fov / 2.0) + ((i as f64 / (self.lidar_points-1) as f64) * self.lidar_fov));
+                        //let angle= utils::modulo_2pi_f64(base_angle);
+                        //godot_print!("ANGLE {}", angle.to_degrees());
+                        //IF the scene exist
+                        if let Some(mut world)= self.base().get_world_3d() {
+                            //IF the space_state (to test raycast) exist
+                            if let Some(mut space_state)= world.get_direct_space_state(){
+                                //If the parent is a Node3D
+                                if let Ok(parent)= parent_obj.clone().try_cast::<Node3D>() {
+                                    //Get the position of the parent
+                                    let origin= parent.get_global_position();
+                                    // generate a raycast of 50m with the specific angle
+                                    let mut raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: 50.0*cos(utils::modulo_pi_f64(-(angle + angle_offset))) as f32, y: 0.5, z: 50.0*sin(utils::modulo_pi_f64(-(angle+ angle_offset))) as f32});
+                                    //Get the collision of the raycast and Rigidbodies of in the scene
+                                    let collision= space_state.intersect_ray(raycast.as_ref());
+                                    //MATCH: there is a collider position? (means there is a collision with a RigidBody?)
+                                    match collision.get("position") {
+                                        //There is a collision with a RigidBody
+                                        Some(pos_variant) => {
+                                            match pos_variant.try_to::<Vector3>() {
+                                                Ok(pos) => {
+                                                    //Add the distance with the rigidbody in the list, keyed by angle
+                                                    let distance = origin.distance_to(pos);
+                                                    //godot_print!("Distance at angle {}rad {}° => {}", angle, angle.to_degrees(), distance);
+                                                    if distance < 0.0 {
+                                                        godot_print!("Error: Negative distance detected");
+                                                    }
+                                                    measurements.insert(angle.to_degrees() as f32, distance);
+                                                    //measurements.push(origin.distance_to(pos));
+                                                },
+                                                Err(_) => {
+                                                    godot_print!("Error: Collider position is not a Vector3D");
+                                                },
                                             }
-                                            let tamere= measurements.len();
-                                            measurements.insert(angle.to_degrees() as f32, distance);
-                                            let lapute= measurements.len();
-                                            if tamere == lapute {
-                                                godot_print!("Error: Measurement at angle {}rad {}° not inserted", angle, angle.to_degrees());
-                                            }
-                                            //measurements.push(origin.distance_to(pos));
                                         },
-                                        Err(_) => {
-                                            godot_print!("Error: Collider position is not a Vector3D");
-                                        },
+                                        //No RigidBody detected
+                                        None => {
+
+                                        }
                                     }
-                                },
-                                //No RigidBody detected
-                                None => {
-
                                 }
                             }
-                        }
+                        }    
                     }
-                }    
-            }
-        }
-        //IF the UDP module exist
-        if let Some(udp_worker)= &self.udp_worker {
-            if measurements.len() > 0 {
-                if udp_worker.try_run() {
-                    match udp_worker.get_module().downcast_ref::<UDPChannel>() {
-                        Some(udp) => {
-                            let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
-                            //godot_print!("Frame generated {:?}\n", frame);
-                            //godot_print!("Frame bytes: {:?}\n", frame);
-                            udp.publish_message(frame.clone());//measurements.to_bytes());
-                            //godot_print!("SEND DATA\n");
-                            /*let translatables= messages::parse_frame(frame.clone());
-                            let mut i= 0;
-                            for translatable in translatables {
-                                godot_print!("Translatable {}\n", i);
-                                i+= 1;
-                                match translatable.downcast_ref::<LidarMeasurements>() {
-                                    Some(lidar_meas) => {
-                                        godot_print!("LIDAR MEASUREMENTS: {:?}\n", lidar_meas.order_by_angle())
+
+                    //IF the UDP module exist
+                    if let Some(udp_worker)= &self.udp_worker {
+                        if measurements.len() > 0 {
+                            if udp_worker.try_run() {
+                                match udp_worker.get_module().downcast_ref::<UDPChannel>() {
+                                    Some(udp) => {
+                                        let frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        //godot_print!("Send IMU");
+                                        //godot_print!(" => {:?}\n", frame);
+                                        //godot_print!("= {:?}\n", frame);
+                                        udp.publish_message(frame_imu.clone());
+                                        //let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        //udp.publish_message(frame.clone());
+                                        //godot_print!("Send LiDAR");
                                     },
                                     None => {
 
                                     },
                                 }
-                                //println!("MailBox Loopback received: {:?}", translatable);
-                            }*/
-                        },
-                        None => {
-
-                        },
+                            } 
+                        }
+                        //udp.exec_main_task();
                     }
-                } 
+                },
+                Err(_) => {
+
+                },
             }
-            //udp.exec_main_task();
+            
         }
+        
     }
 
     fn exit_tree(&mut self) {

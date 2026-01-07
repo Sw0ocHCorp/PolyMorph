@@ -1,7 +1,10 @@
-use std::{collections::VecDeque, io::{self, Error}, net::UdpSocket, sync::{Arc, Mutex}};
+use std::{io::{self, Error}, net::UdpSocket, sync::{Arc, Mutex}};
 
-use crate::{event_management::{Event, Observer}, messages::Translatable, worker::Module};
+use socket2::{Socket, SockRef};
 
+use crate::core::{event_management::{Event, Observer}, worker::Module};
+
+const MAX_RECEPTION_BUFFER: usize= 2*1024*5012;
 
 pub trait Channel : Module {
     fn connect(&self);
@@ -17,12 +20,12 @@ pub struct UDPChannel {
     target_port: u32,
     socket: Arc<Mutex<Option<UdpSocket>>>,
     cmd_observer: Mutex<Option<Observer<Vec<u8>>>>,
-    frame_event: Mutex<Event<Vec<u8>>>,
+    frame_event: Mutex<Event<Vec<u8>>>
 }
 
 impl UDPChannel {
     pub fn new(addr: &str, port: u32, target_addr: &str, target_port: u32) -> Arc<Self> {
-        let mut udp= Arc::new(Self{addr: addr.to_string(),port: port, socket: Arc::new(Mutex::new(None)),
+        let udp= Arc::new(Self{addr: addr.to_string(),port: port, socket: Arc::new(Mutex::new(None)),
                                                             frame_event: Mutex::new(Event::new_empty()), cmd_observer: Mutex::new(None),
                                                         target_addr: target_addr.to_string(), target_port: target_port});
         let udp_cl= udp.clone();
@@ -77,12 +80,16 @@ impl Channel for UDPChannel {
             Ok(s) => {
                 //Set socket non blocking mod
                 s.set_nonblocking(true).expect("Failed to set socket to non-blocking mode");
-                println!("Connected at {}:{}", self.addr.clone(), self.port.clone());
-                if let Ok(mut socket) = self.socket.try_lock() {
-                    *socket= Some(s);
+                //Set the max buffer size for the UDP reception (OS buffer size, not buffer size of the listening operation)
+                let socket_ref= SockRef::from(&s);
+                if let Ok(())= socket_ref.set_recv_buffer_size(MAX_RECEPTION_BUFFER) {
+                    println!("Connected at {}:{}", self.addr.clone(), self.port.clone());
+                    if let Ok(mut socket) = self.socket.try_lock() {
+                        *socket= Some(s);
+                    }
                 }
             },
-            Err(e) => { 
+            Err(_) => { 
                 println!("Not able to create Socket at {}:{}", self.addr.clone(), self.port.clone());
             }
         };
@@ -111,8 +118,8 @@ impl Channel for UDPChannel {
                 println!("WARNING: Can't send message because Socket mutex has already been taken");
                 println!("INFO: Frame is stored in the cmd queue, it will be sent when mutex will be available");
                 match self.cmd_observer.try_lock() {
-                    Ok(mut observer) => {
-                        if let Some(mut obs) = observer.as_ref() {
+                    Ok(observer) => {
+                        if let Some(obs) = observer.as_ref() {
                             obs.put_data_in_buffer(msg);
                         }
                     },
@@ -125,7 +132,7 @@ impl Channel for UDPChannel {
     }
 
     fn listen_for_frame(&self)  -> Result<Vec<u8>, io::Error> {
-        let mut buf = [0; 4096];
+        let mut buf = [0; 5000];
         match self.socket.clone().try_lock() {
             //IF socket mutex is availabe, take it to be able to listen for incoming frame
             Ok(socket) => {
@@ -134,7 +141,7 @@ impl Channel for UDPChannel {
                     Some(sock) => {
                         match sock.recv_from(&mut buf) {
                             //IF frame is received, return it
-                            Ok((bytes_received, src_addr)) => {
+                            Ok((bytes_received, _)) => {
                                //println!("Received Data");
                                 /*match String::from_utf8(buf[..bytes_received].to_vec()) {
                                     Ok(utf8_frame) => {
@@ -156,7 +163,7 @@ impl Channel for UDPChannel {
                     },
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 return Err(Error::new(io::ErrorKind::Other, "WARNING: Can't listen for frame because Socket mutex has already been taken"));
             },
         }
@@ -164,7 +171,7 @@ impl Channel for UDPChannel {
 
     fn close(&self) {
         //Loop until socket is not clode
-        while true {
+        loop {
             match self.socket.clone().try_lock() {
                 Ok(mut socket) => {
                     *socket= None;

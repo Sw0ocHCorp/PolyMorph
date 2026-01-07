@@ -1,26 +1,24 @@
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::lidar_management::measurements::LidarMeasurements;
-use crate::lidar_management::{self};
+use crate::{lidar_management::measurements::LidarMeasurements, positionning::pose::{IMUData, Pose}};
 
 #[derive(Clone)]
 pub enum ParsingState {
     NONE,
     SOF, 
-    FRAME_SIZE,
+    FrameSize,
     CHUNK
 }
 
 pub const SOF: u16= 0xabcd;
 pub enum DataChunk {
-    COMMAND_CHUNK= 0x0001,
-    TELEOPERATION_CHUNK= 0x0002,
-    GNSS_POS_CHUNK= 0x0003,
-    INTERNAL_PERCEPTION_CHUNK= 0x0004,
-    LIDAR_SCAN_CHUNK= 0x0005,
+    CommandChunk= 0x0001,
+    TeleoperationChunk= 0x0002,
+    GnssPosChunk= 0x0003,
+    InternalPerceptionChunk= 0x0004,
+    LidarScanChunk= 0x0005,
 } 
 
 
@@ -48,40 +46,44 @@ pub fn parse_frame(frame: Vec<u8>) -> Vec<Box<dyn Translatable>> {
     let mut parsing_state= ParsingState::SOF;
     let mut frame_size= 1;
     let mut buffer:Vec<u8>= Vec::new();
-    for mut i in 0..frame.len() {
-        buffer.push(frame[i]);
-        if frame_size > 0 {
-            if buffer.len() >= 2{
-                match &buffer[buffer.len() - 2..] {
-                    [hi, lo] => {
+    let mut chunk_size= 0;
+    let mut raw_frame= frame.clone();
+    while raw_frame.len() > 0 {
+        buffer.push(raw_frame[0]);
+        raw_frame.remove(0);
+        if buffer.len() >= 2{
+            match &buffer[buffer.len() - 2..] {
+                            [hi, lo] => {
                         if parsing_state.clone() as u16 == ParsingState::SOF as u16 {
                             if u16::from_be_bytes([*hi, *lo]) == SOF  {
-                                parsing_state= ParsingState::FRAME_SIZE;
+                                parsing_state= ParsingState::FrameSize;
                                 buffer.clear();
                             } 
-                        } else if parsing_state.clone() as u16 == ParsingState::FRAME_SIZE as u16 {
+                        } else if parsing_state.clone() as u16 == ParsingState::FrameSize as u16 {
                             frame_size= u16::from_be_bytes([*hi, *lo]);
                             parsing_state= ParsingState::CHUNK;
                             buffer.clear();
                         }
                         else {
-                            if u16::from_be_bytes([*hi, *lo]) == DataChunk::LIDAR_SCAN_CHUNK as u16 {
+                            if u16::from_be_bytes([*hi, *lo]) == DataChunk::LidarScanChunk as u16 {
                                 let mut lidar_measurements= LidarMeasurements::new(false);
-                                let chunk_size= lidar_measurements.fill_from_bytes(frame[i+1..].to_vec());
+                                chunk_size= lidar_measurements.fill_from_bytes(raw_frame.clone());
                                 translatables.push(Box::new(lidar_measurements));
-                                //let chunk_size= LidarMeasurements::new_from_bytes(frame[i+1..].to_vec());
-                                i += chunk_size;
+                                raw_frame.drain(..chunk_size);
+                                buffer.clear();
+                            } else if u16::from_be_bytes([*hi, *lo]) == DataChunk::InternalPerceptionChunk as u16 {
+                                let mut imu_data= IMUData::new();
+                                chunk_size= imu_data.fill_from_bytes(raw_frame.clone());
+                                translatables.push(Box::new(imu_data));
+                                raw_frame.drain(..chunk_size);
                                 buffer.clear();
                             }
                         }
                     }
                     _ => {
                     }
-                }
             }
-        } else {
-            break;
-        }
+        }        
     }
     return translatables;
 }

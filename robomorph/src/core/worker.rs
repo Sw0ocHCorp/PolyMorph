@@ -1,9 +1,9 @@
-use core::time;
-use std::{ any::Any, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant, SystemTime}};
+use std::{ sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant, SystemTime}};
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::{event_management::{Event, Observer}, worker};
+use crate::core::event_management::{Event, Observer};
+
 
 pub trait Module : Downcast + Send + Sync {
     fn exec_main_task(&self);
@@ -28,7 +28,7 @@ pub struct Worker {
     module: Arc<dyn Module>,
     next_worker_event: Arc<Mutex<Event<()>>>,
     previous_worker_observer: Mutex<Option<Observer<()>>>,
-    trig_time: Mutex<Instant>,
+    next_exec_instant: Mutex<Instant>,
     frequency: i64,
     task_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
     name: String,
@@ -40,11 +40,11 @@ pub struct Worker {
 impl Worker {
 
     pub fn new(module: Arc<dyn Module>, name: &str, freq: i64, is_async: bool) -> Arc<Self> {
-        let mut worker= Arc::new(Self {
+        let worker= Arc::new(Self {
             module,
             next_worker_event: Arc::new(Mutex::new(Event::new_empty())),
             previous_worker_observer: Mutex::new(None),
-            trig_time: Mutex::new(Instant::now()),
+            next_exec_instant: Mutex::new(Instant::now()),
             frequency: freq,
             task_thread: Arc::new(Mutex::new(None)),
             name: name.to_string().clone(),
@@ -52,10 +52,10 @@ impl Worker {
             is_async: is_async,
             prev_worker_name: Mutex::new("".to_string())
         });
-        let mut worker_weak= Arc::downgrade(&worker);
-        let obs = Observer::new(Arc::new(Mutex::new(Box::new(move |x: ()| {
+        let worker_weak= Arc::downgrade(&worker);
+        let obs = Observer::new(Arc::new(Mutex::new(Box::new(move |_: ()| {
             // Step 3: Upgrade Weak to Strong only when the callback runs
-            if let Some(mut w) = worker_weak.upgrade() {
+            if let Some(w) = worker_weak.upgrade() {
                 w.try_run();
             }
         }))));
@@ -70,19 +70,19 @@ impl Worker {
         let mut is_executed= false;
         //IF a frequency is specified 
         if self.frequency > 0 {
-            if let Ok(mut trig_time)= self.trig_time.try_lock() {
+            if let Ok(mut next_exec_instant)= self.next_exec_instant.try_lock() {
                 let now= Instant::now();
                 //IF the time to start executing the task is reached or exceeded
-                if now >= *trig_time {
+                if now >= *next_exec_instant {
                     //Compute the next trig time
-                    if let Some(new_trig_time) = trig_time.checked_add(Duration::from_millis((1000 / self.frequency) as u64)) {
+                    if let Some(new_next_exec_instant) = next_exec_instant.checked_add(Duration::from_millis((1000 / self.frequency) as u64)) {
                         is_executed= true;
-                        //print!("NEW TRIG TIME => {} ", new_trig_time.duration_since(now).as_millis());
+                        //print!("NEW TRIG TIME => {} ", new_next_exec_instant.duration_since(now).as_millis());
                         self.module.clone().exec_main_task();
                         if let Ok(next_worker_event)= self.next_worker_event.try_lock() {
                             next_worker_event.trig(());
                         }
-                        *trig_time= new_trig_time;
+                        *next_exec_instant= new_next_exec_instant;
                     }
                 }
             }
@@ -113,35 +113,41 @@ impl Worker {
             let task_thread= thread::Builder::new()
                                                 .name(name.clone())
                                                 .spawn(move || {
-                while true {
+                //Next time to execute the module task
+                let mut next_exec_instant= Instant::now();
+                loop {
+                    //IF the thread needs to be ended, we stop the thread loop
                     if let Ok(is_running) = is_thread_running.clone().try_lock() {
-                        if *is_running == true {
-                            if freq > 0 {
-                                match starting_time.elapsed() {
-                                    Ok(elapsed_time) => {
-                                        if elapsed_time.as_millis() >= (1000 / freq) as u128 {
-                                            starting_time= SystemTime::now();
-                                            module.clone().exec_main_task();
-                                            if let Ok(worker_publisher)= next_worker_event.try_lock() {
-                                                worker_publisher.trig(());
-                                            }
-                                        }
-                                    },
-                                    Err(_) => {
-
-                                    },
-                                }
-                            } else {
-                                module.clone().exec_main_task();
-                            }
-                        } else {
+                        if *is_running == false {
                             println!("INFO: {} Dedicated Task Thread ENDED", name.clone());
                             break;
+                        }
+                    } 
+                    if freq > 0 {
+                        //The time at the module task execution
+                        //let start_time= Instant::now();
+                        module.clone().exec_main_task();
+                        if let Ok(worker_publisher)= next_worker_event.try_lock() {
+                            worker_publisher.trig(());
+                        }
+
+                        //let exec_duration= start_time.elapsed();
+                        //let prev_exec_time= next_exec_instant.clone();
+                        //Update of the time at the next module task execution
+                        next_exec_instant += Duration::from_millis((1000 / freq) as u64);
+                        //Get the time now
+                        let now= Instant::now();
+                        if now < next_exec_instant {
+                            //Sleep the remaining time before the next module execution time
+                            thread::sleep(next_exec_instant - now);
+                            //println!("Elapsed Time= {:?} for {}", (Instant::now()- prev_exec_time), name);
+                        } else {
+                            next_exec_instant= now;
                         }
                     }
                 }
             });
-            if let Ok(mut worker_thread_guard)= self.task_thread.clone().try_lock() {
+            if let Ok(worker_thread_guard)= self.task_thread.clone().try_lock() {
                 if let Some(mut worker_thread)= worker_thread_guard.as_ref() &&
                         let Ok(tsk_thread)= task_thread {
                     worker_thread= &tsk_thread;
@@ -154,7 +160,7 @@ impl Worker {
 
     pub fn stop_task_thread(&self) {
         if self.is_async {
-            while true {
+            loop {
                 if let Ok(mut is_running) = self.is_thread_running.clone().try_lock() {
                     *is_running= false;
                     println!("INFO: END Task Thread CMD sent for {}", self.name.clone());
@@ -226,7 +232,7 @@ impl WorkerFactory {
             if given_worker_name == w.name {
                 given_worker= Some(w);
             }
-            else if next_worker_name == w.name && let Some(mut prev_worker)= given_worker.clone() &&
+            else if next_worker_name == w.name && let Some(prev_worker)= given_worker.clone() &&
                                                 let Some(prev_worker_observer)= w.get_worker_observer() {
                 prev_worker.set_next_worker(prev_worker_observer);
             }
@@ -239,7 +245,7 @@ impl WorkerFactory {
             if given_worker_name == w.name {
                 given_worker= Some(w);
             }
-            else if next_worker_names.contains(&w.name) &&  let Some(mut prev_worker)= given_worker.clone() &&
+            else if next_worker_names.contains(&w.name) &&  let Some(prev_worker)= given_worker.clone() &&
                                                         let Some(prev_worker_observer)= w.get_worker_observer() {
                 prev_worker.set_next_worker(prev_worker_observer);
             }

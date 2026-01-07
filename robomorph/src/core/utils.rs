@@ -1,5 +1,7 @@
 use std::f32::consts::PI;
 
+use ndarray::{Array1, arr1};
+
 
 pub fn contain_bytes(src_bytes: Vec<u8>, target_bytes: Vec<u8>) -> i128{
     let mut start_index= -1;
@@ -62,4 +64,16 @@ pub fn euclidean_distance(pt1: Vec<f32>, pt2: Vec<f32>) -> f32 {
         return -1.0;
     }
 
+}
+
+pub fn compute_cross_product(a: Array1<f32>, b: Array1<f32>) -> Array1<f32> {
+    if a.len() == 3 && b.len() == 3 {
+        return arr1(&[
+                            a[1] * b[2] - a[2] * b[1],
+                            a[2] * b[0] - a[0] * b[2],
+                            a[0] * b[1] - a[1] * b[0],
+                        ]);
+    } else {
+        return arr1(&[0.0]);
+    }
 }

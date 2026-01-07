@@ -1,15 +1,14 @@
-use crate::worker::Module;
-
-pub mod event_management;
-pub mod worker;
 pub mod communication;
-pub mod messages;
 pub mod lidar_management;
-pub mod utils;
+pub mod filtering;
+pub mod positionning;
+pub mod control;
+pub mod core;
 
 #[cfg(test)]
-mod TestUtilsFunctions {
-    use crate::utils;
+mod test_utils_functions {
+    use crate::core::utils;
+
 
  
     #[test]
@@ -30,10 +29,10 @@ mod TestUtilsFunctions {
 }
 
 #[cfg(test)]
-mod TestWorkers {
-    use std::{sync::{Arc, Mutex}, thread, time};
+mod test_workers {
+    use std::{sync::Arc, thread, time};
 
-    use crate::worker::{Worker, WorkerFactory};
+    use crate::core::worker::{Module, Worker, WorkerFactory};
 
     use super::*;
 
@@ -54,7 +53,7 @@ mod TestWorkers {
         if let Some(worker_observer) = worker2.clone().get_worker_observer() {
             worker1.clone().set_next_worker(worker_observer);
         }
-        while true {
+        loop {
             thread::sleep(time::Duration::from_micros(100));
             worker1.try_run();
         }
@@ -78,11 +77,11 @@ mod TestWorkers {
 
         factory2.set_workers_link("AsyncDummy1", "AsyncDummy2");
 
-        //factory.start_first_workers();
+        factory.start_all_async_workers();
         
-        while true {
-            thread::sleep(time::Duration::from_micros(100));thread::sleep(time::Duration::from_micros(100));
-            factory2.start_worker("AsyncDummy1");
+        loop {
+            //thread::sleep(time::Duration::from_micros(100));thread::sleep(time::Duration::from_micros(100));
+            //factory2.start_worker("AsyncDummy1");
         }
         //factory
     }
@@ -90,15 +89,15 @@ mod TestWorkers {
 }
 
 #[cfg(test)]
-mod TestComInterface {
+mod test_com_interface {
     use std::{thread, time};
 
-    use crate::{communication::UDPChannel, worker::{self, Worker}};
+    use crate::{communication::UDPChannel, core::worker::Worker};
  
     #[test]
     fn it_works() {
-        let mut udp1= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 9000);
-        let mut udp2= UDPChannel::new_async("127.0.0.1", 9000, "127.0.0.1", 8080);
+        let udp1= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 9000);
+        let udp2= UDPChannel::new_async("127.0.0.1", 9000, "127.0.0.1", 8080);
         if let Some(cmd_observer)= udp2.get_cmd_observer() {
             udp1.add_frame_observer(cmd_observer);
         }
@@ -113,19 +112,19 @@ mod TestComInterface {
         worker1.run_in_dedicated_thread();
         thread::sleep(time::Duration::from_secs(1));
         udp_cl.clone().publish_message("COUCOU".into());
-        while true {
+        loop {
             
             
         }
     }
 }
 
-mod TestSerializationDeserialization {
-    use std::collections::HashMap;
+mod test_serialization_deserialization {
+    use crate::{lidar_management::measurements::LidarMeasurements, core::messages::{self, Translatable}};
 
-    use ordered_float::OrderedFloat;
 
-    use crate::{lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}};
+
+    
 
     #[test]
     fn it_works() {

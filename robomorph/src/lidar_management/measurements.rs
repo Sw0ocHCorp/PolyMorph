@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
+use crate::core::{messages::{DataChunk, Translatable}, utils};
 
-use crate::{lidar_management::{measurements}, messages::{DataChunk, Translatable}, utils};
+
 
 pub const LIDAR_ANGLES_CONFIG: u16= 0x000a;
 pub const LIDAR_MEASUREMENT: u16= 0x000b;
@@ -77,9 +77,9 @@ impl LidarObject {
 
 #[derive(Debug, Clone)]
 pub struct LidarMeasurements {
-    lidar_pts: Vec<LidarPoint>,
-    angle_in_deg: bool,
-    lidar_objects: Vec<LidarObject>
+    pub lidar_pts: Vec<LidarPoint>,
+    pub angle_in_deg: bool,
+    pub lidar_objects: Vec<LidarObject>
 }
 
 impl LidarMeasurements {
@@ -190,7 +190,6 @@ impl Translatable for LidarMeasurements {
                         data_size= u16::from_be_bytes(arr) as i32;
                         remain_bytes= u16::from_be_bytes(arr);
                         i+= 2;
-                        buffer.clear();
                     }
                 } else {
                     if let Ok(arr) = bytes[i..i+4].try_into() {
@@ -199,15 +198,19 @@ impl Translatable for LidarMeasurements {
                         j+=1;
                         i+=4;
                         remain_bytes-=1;
-                        buffer.clear();
                         if remain_bytes == 0 {
-                            break;
+                            id = 0;
+                            data_size= -1;
                         }
                     }
                 }
-
-            } else if (id == LIDAR_OBSTACLES) {
+                buffer.clear();
+            } else if id == LIDAR_OBSTACLES {
                 if let Ok(arr) = bytes[i..i+2].try_into() {
+                    if data_size < 0 {
+                        data_size= u16::from_be_bytes(arr) as i32;
+                    } else {
+                        cluster_id += 1;
                         let mut obj= LidarObject::new_empty(cluster_id);
                         obj.bound_index= u16::from_be_bytes(arr) as usize;
                         for n in bound_index..=obj.bound_index {
@@ -215,12 +218,11 @@ impl Translatable for LidarMeasurements {
                             obj.add_inner_point(self.lidar_pts[n]);
                         }
                         bound_index= obj.bound_index+1;
-                        cluster_id += 1;
                         self.lidar_objects.push(obj);
                     }
-                /*if let Ok(arr) = bytes[i..i+2].try_into() {
-                    
-                }*/
+                }
+                i+= 2;
+                buffer.clear();
             } else {
                 if utils::contain_bytes(buffer.clone(), LIDAR_ANGLES_CONFIG.to_be_bytes().to_vec()) >= 0{
                     id= LIDAR_ANGLES_CONFIG;
@@ -243,7 +245,7 @@ impl Translatable for LidarMeasurements {
     }
 
     fn to_bytes(&mut self) -> Vec<u8> {
-        let mut frame:Vec<u8>= (DataChunk::LIDAR_SCAN_CHUNK as u16).to_be_bytes().to_vec();
+        let mut frame:Vec<u8>= (DataChunk::LidarScanChunk as u16).to_be_bytes().to_vec();
         //Let 2 bytes for the frame size
         //frame.append(&mut (0 as u16).to_be_bytes().to_vec());
         frame.append(&mut LIDAR_ANGLES_CONFIG.to_be_bytes().to_vec());
@@ -261,7 +263,7 @@ impl Translatable for LidarMeasurements {
         }
         frame.append(&mut u16::to_be_bytes(self.lidar_pts.len() as u16).to_vec());
         for i in 0..self.lidar_pts.len() {
-            frame.append(&mut f32::to_be_bytes((self.lidar_pts[i].distance)).to_vec());
+            frame.append(&mut f32::to_be_bytes(self.lidar_pts[i].distance).to_vec());
         }
         frame.append(&mut LIDAR_OBSTACLES.to_be_bytes().to_vec());
         frame.append(&mut u16::to_be_bytes(self.lidar_objects.clone().len() as u16).to_vec());

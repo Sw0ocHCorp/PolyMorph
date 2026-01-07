@@ -1,6 +1,5 @@
-use std::{collections::HashSet, process::id, sync::Arc, vec};
 
-use crate::{lidar_management::measurements::{self, LidarMeasurements, LidarObject, LidarPoint}, utils::euclidean_distance};
+use crate::lidar_management::measurements::{LidarMeasurements, LidarObject, LidarPoint};
 
 pub trait SegmentationAlgorithm: Send + Sync {
     fn detect_objects(&self, measurements: &mut LidarMeasurements) -> Vec<LidarObject>;
