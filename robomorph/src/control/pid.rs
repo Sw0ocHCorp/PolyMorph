@@ -27,13 +27,11 @@ impl PIDController {
             self.previous_error= 0.0;
         }*/
         //println!("Integral Error= {}", self.integral_error);
-        println!("-------------------------");
         let p= self.p*error;
         let i= self.i*self.integral_error;
         let d= self.d*(error - self.previous_error);
         let output= p + i + d;
         println!("P= {} | I= {} | D= {}", p, i, d);
-        println!("-------------------------");
         self.previous_error = error;
         return output;
     }

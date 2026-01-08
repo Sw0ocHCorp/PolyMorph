@@ -14,7 +14,7 @@ pub struct IMUData {
 
 impl IMUData {
     pub fn new() -> Self {
-        return Self { accel: [0.0, 0.0, 0.0], gyro: [0.0, 0.0, 0.0], magnetic_field: [0.0, 0.0, 0.0] };
+        return Self { accel: [0.0, 0.0, 0.0], gyro: [0.0, 0.0, 0.0], magnetic_field: [0.0, 0.0, 0.0]};
     }
 }
 

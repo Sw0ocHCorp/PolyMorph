@@ -19,6 +19,7 @@ pub enum DataChunk {
     GnssPosChunk= 0x0003,
     InternalPerceptionChunk= 0x0004,
     LidarScanChunk= 0x0005,
+    DebugChunk= 0xfeef,
 } 
 
 

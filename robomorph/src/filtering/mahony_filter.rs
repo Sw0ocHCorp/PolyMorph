@@ -12,11 +12,11 @@ pub struct MahonyFilter {
 }
 
 impl MahonyFilter {
-    pub fn new(p: f32, i:f32, max_integral_error: f32, delta_time: f32, min_threshold_error: f32, leak_factor: f32) -> Self {
+    pub fn new(p: f32, i:f32, d: f32, max_integral_error: f32, delta_time: f32, min_threshold_error: f32, leak_factor: f32) -> Self {
         let init_orientation= UnitQuaternion::from_euler_angles(0.0, 0.0, 0.0);
-        return Self { controllers: [PIDController::new(p, i, 0.0, max_integral_error, min_threshold_error, leak_factor), 
-                                        PIDController::new(p, i, 0.0, max_integral_error, min_threshold_error, leak_factor), 
-                                        PIDController::new(p, i, 0.0, max_integral_error, min_threshold_error, leak_factor)], 
+        return Self { controllers: [PIDController::new(p, i, d, max_integral_error, min_threshold_error, leak_factor), 
+                                        PIDController::new(p, i, d, max_integral_error, min_threshold_error, leak_factor), 
+                                        PIDController::new(p, i, d, max_integral_error, min_threshold_error, leak_factor)], 
                         delta_time: delta_time, quaternion_orientation: init_orientation};
     }
 
@@ -88,6 +88,7 @@ impl MahonyFilter {
         //  To get the error between them
         let error_magnetic= utils::compute_cross_product(magnetic_field.clone(), expected_local_field);
         let error= error_accel + error_magnetic;
+
         /*
          * Computing the angular velocity of the robot
          * Based on Gyrometer measurement because 
@@ -108,6 +109,8 @@ impl MahonyFilter {
         }
         //Get the new euler orientation from the current orientation in Quaternion Frame
         let euler_angles= self.quaternion_orientation.to_euler_angles();
+        println!("Gyr,o Vector= {:?}", [imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]]);
+        println!("Global error {:?} Estimated Orientation= {:?}", error, [euler_angles.roll, euler_angles.pitch, euler_angles.yaw]);
         return [euler_angles.roll, euler_angles.pitch, euler_angles.yaw];
     }
 }

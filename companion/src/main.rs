@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 use ndarray::Array2;
+use robomorph::{communication::UDPChannel, core::{event_management::{Event, Observer}, messages, worker::{Module, WorkerFactory}}, filtering::mahony_filter::MahonyFilter, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::LidarMeasurements, segmentation_algorithms::ClassicSolver}, positionning::pose::{IMUData, Pose}};
 
-use robomorph::{communication::UDPChannel, event_management::{Event, Observer}, filtering::{kalman_filters::GenericEKF, mahony_filter::MahonyFilter}, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::LidarMeasurements, segmentation_algorithms::ClassicSolver}, messages, positionning::pose::{IMUData, Pose}, utils, worker::{Module, WorkerFactory}};
+
 
 pub struct BenchmarkFiltering {
     imu_data_observer: Mutex<Option<Observer<IMUData>>>,
@@ -16,7 +17,7 @@ impl Module for BenchmarkFiltering {
 }
 
 impl BenchmarkFiltering {
-    pub fn new(p: f32, i: f32, max_integral_error: f32, dt: f32 ) -> Arc<Self> {
+    pub fn new(p: f32, i: f32, d: f32, max_integral_error: f32, dt: f32 ) -> Arc<Self> {
         /*let filter= GenericEKF::new(
                                                 Array2::zeros((3, 1)), Array2::eye(3), Array2::eye(3), Array2::eye(3), Array2::eye(3), 
                                                 system_dynamics_fun, system_jacob_fun, dt);   
@@ -43,7 +44,7 @@ impl BenchmarkFiltering {
             *obs_guard= Some(obs);
         }
         return this;*/
-        let filter= MahonyFilter::new(p, i, max_integral_error, dt, 0.5f32.to_radians(), 0.98);
+        let filter= MahonyFilter::new(p, i, d, max_integral_error, dt, 0.5f32.to_radians(), 1.0);
         let this = Arc::new(Self { imu_data_observer: Mutex::new(None), data_filtered_event: Mutex::new(Event::new_empty()), filter: Mutex::new(filter) });
         let mut filter_manager= this.clone();
         let obs= Observer::new(Arc::new(Mutex::new(move |imu_data: IMUData| {
@@ -210,7 +211,7 @@ fn main() {
     let mut factory= WorkerFactory::new();
     let mailbox= MailBox::new();
     let udp= UDPChannel::new_async("127.0.0.1", 8090, "127.0.0.1", 9000);
-    let pose_filter= BenchmarkFiltering::new(0.1, 1.5, 2.0, 1.0/60.0);
+    let pose_filter= BenchmarkFiltering::new(20.0, 0.01, 3.25, 10.0, 1.0/50.0);
     let classic_solver= Arc::new(ClassicSolver::new( 0.10, 2,
         Box::new(|p1, p2|{
             let loc1= p1.get_location();

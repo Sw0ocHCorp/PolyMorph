@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, lidar_management::measurements::LidarMeasurements, messages::{self, Translatable}, positionning::pose::IMUData, utils, worker::{Module, Worker}};
+use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
 
 
 #[derive(GodotClass)]
@@ -11,6 +11,7 @@ pub struct AutonomyNode {
     #[base]
     base: Base<Node3D>,
     udp_worker: Option<Arc<Worker>>,
+    debug_worker: Option<Arc<Worker>>,
     lidar_points: u32,
     lidar_fov: f64,
     lidar_angle_offset: f64,
@@ -31,6 +32,7 @@ impl INode3D for AutonomyNode{
         //let test= vec![]
         self.world_magnetic_field= Vector3 { x: 1.0, y: 0.0, z: 0.0 };
         let udp= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090);
+        let udp_debug= UDPChannel::new_async("127.0.0.1", 9010, "127.0.0.1", 9000);
         //Get and store the metadata of the 
         if self.base().has_meta("lidarPoints") {
             match self.base().get_meta("lidarPoints").try_to::<i32>() {
@@ -112,7 +114,8 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
             self.data_fps= 10;
         }
-        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false))
+        self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
+        self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
     }
 
     fn input(&mut self, event: Gd < InputEvent >,) {
@@ -164,11 +167,15 @@ impl INode3D for AutonomyNode{
         let mut measurements= LidarMeasurements::new(true);
         let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
+        let mut true_orientation:[f32; 3]= [0.0, 0.0, 0.0];
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
             match parent_obj.clone().try_cast::<RigidBody3D>() {
                 Ok(mut robot) => {
+                    let rob_orientation= robot.get_global_rotation();
+                    
+                    true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
                     let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
@@ -263,25 +270,46 @@ impl INode3D for AutonomyNode{
                     }
 
                     //IF the UDP module exist
-                    if let Some(udp_worker)= &self.udp_worker {
+                    if let Some(udp_worker)= &self.udp_worker && let Some(debug_udp) = &self.debug_worker {
                         if measurements.len() > 0 {
                             if udp_worker.try_run() {
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
-                                        let frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
                                         udp.publish_message(frame_imu.clone());
-                                        //let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
-                                        //udp.publish_message(frame.clone());
-                                        //godot_print!("Send LiDAR");
+                                        /*let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        udp.publish_message(frame.clone());
+                                        godot_print!("Send LiDAR");*/
                                     },
                                     None => {
 
                                     },
                                 }
-                            } 
+                            }
+                            /*if debug_udp.try_run() {
+                                match debug_udp.get_module().downcast_ref::<UDPChannel>() {
+                                    Some(dbg_udp) => {
+                                        let mut debug_frame= SOF.to_be_bytes().to_vec();
+                                        debug_frame.append(&mut (0 as u16).to_be_bytes().to_vec());
+                                        debug_frame.append(&mut ((DataChunk::DebugChunk as u16).to_be_bytes().to_vec()));
+                                        debug_frame.append(&mut (true_orientation.len() as u16 * 4).to_be_bytes().to_vec());
+                                        for i in 0..3 {
+                                            debug_frame.append(&mut f32::to_be_bytes(true_orientation[i]).to_vec());
+                                        }
+                                        let frame_size= u16::to_be_bytes(debug_frame.len() as u16);
+                                        debug_frame[2]= frame_size[0];
+                                        debug_frame[3]= frame_size[1];
+                                        godot_print!("SEND True Orientation: X= {} Y= {} Z= {}\n", true_orientation[0], true_orientation[1], true_orientation[2]);
+                                        godot_print!("{:?}\n", debug_frame);
+                                        dbg_udp.publish_message(debug_frame.clone());
+                                    },
+                                    None => {
+                                    },
+                                }
+                            } */
                         }
                         //udp.exec_main_task();
                     }
