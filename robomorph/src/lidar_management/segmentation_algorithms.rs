@@ -1,8 +1,8 @@
 
-use crate::lidar_management::measurements::{LidarMeasurements, LidarObject, LidarPoint};
+use crate::{lidar_management::measurements::{LidarMeasurements, LidarObject, LidarPoint}, positionning::pose::Pose};
 
 pub trait SegmentationAlgorithm: Send + Sync {
-    fn detect_objects(&self, measurements: &mut LidarMeasurements) -> Vec<LidarObject>;
+    fn detect_objects(&self, measurements: &mut LidarMeasurements, robot_pose: Pose) -> Vec<LidarObject>;
 }
 
 //Classic Solver based on DBSCAN algorithm
@@ -158,7 +158,7 @@ impl ClassicSolver {
 }
 
 impl SegmentationAlgorithm for ClassicSolver {
-    fn detect_objects(&self, measurements: &mut LidarMeasurements) -> Vec<LidarObject> {
+    fn detect_objects(&self, measurements: &mut LidarMeasurements, robot_pose: Pose) -> Vec<LidarObject> {
         let mut objects: Vec<LidarObject> = Vec::new();
         let mut cluster_id= 1;
         for i in 0..measurements.len() {
@@ -170,21 +170,22 @@ impl SegmentationAlgorithm for ClassicSolver {
                 //  Trying to expand the cluster to find all the inner points of the object
                 if neighbours_indexes.len() >= self.min_pts_object { 
                     let object_pts_indexs= self.get_clustered_lidar_pts_indexes(i, neighbours_indexes.clone(), measurements.get_all_measurements());
-                    let mut lidar_obj= LidarObject::new_empty(cluster_id);
-                    measurements.set_pt_id(i, cluster_id);
+                    let mut inner_pts= Vec::new()
+;                    measurements.set_pt_id(i, cluster_id);
                     let mut bound_index= 0;
                     for idx in object_pts_indexs {
                         if idx > bound_index {
                             bound_index= idx;
                         }
                         measurements.set_pt_id(idx, cluster_id);
-                        if let Some(mut pt) = measurements.get_measurement_by_index(idx) {
-                            pt.set_id(cluster_id);
-                            lidar_obj.add_inner_point(pt);
+                        if let Some(mut pt) = measurements.get_measurement_by_index(idx).clone() {
+                            let mut lidar_pt= LidarPoint::new_from_pose(pt.get_angle(), pt.get_distance(), robot_pose.clone());
+                            lidar_pt.set_id(cluster_id);
+                            
+                            inner_pts.push(lidar_pt);
                         }
                     }
-                    lidar_obj.bound_index= bound_index;
-                    objects.push(lidar_obj);
+                    objects.push(LidarObject::new(cluster_id, inner_pts, robot_pose.clone()));
                     cluster_id+= 1;
                 }
             }

@@ -95,7 +95,7 @@ pub const POSE_ORIENTATION: u16= 0x000e;
 pub const POSE_LINEAR_VELOCITY: u16= 0x000f;
 pub const POSE_ANGULAR_VELOCITY: u16= 0x001a;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Pose {
     location: [f32; 3],
     orientation: [f32; 3],
@@ -107,6 +107,14 @@ impl Pose {
     pub fn new(location: [f32; 3], orientation: [f32; 3],
                     linear_velocity: [f32; 3], angular_velocity: [f32; 3]) -> Self{
         return Self { location, orientation, linear_velocity, angular_velocity };
+    }
+
+    pub fn get_location(&self) -> [f32; 3] {
+        return self.location;
+    }
+
+    pub fn get_orientation(&self) -> [f32; 3] {
+        return self.orientation;
     }
 }
 

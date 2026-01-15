@@ -1,4 +1,5 @@
-use std::{io::{self, Error}, net::UdpSocket, sync::{Arc, Mutex}};
+use core::error;
+use std::{io::{self, Error}, net::{self, UdpSocket}, sync::{Arc, Mutex}};
 
 use socket2::{Socket, SockRef};
 
@@ -154,7 +155,10 @@ impl Channel for UDPChannel {
                                 return Ok(buf[..bytes_received].to_vec())
                             },
                             //IF there is error, return the error /!\WARNING: No incoming frame trigger error WouldBlock (because socket is set in non blocking mode)
-                            Err(e) => {return Err(e);},
+                            Err(e) => {
+                                //println!("No Data Received");
+                                return Err(e);
+                            },
                         }
                     }
                     //IF socket is none, it means interface is not connected, return empty frame

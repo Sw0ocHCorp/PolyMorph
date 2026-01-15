@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, SystemTime}};
 
-use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
+use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
 use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
 
@@ -19,7 +19,8 @@ pub struct AutonomyNode {
     motion_factor: f32,
     last_linear_vel: Vector3,
     world_magnetic_field: Vector3,
-    data_fps: u32
+    data_fps: u32,
+    dt: f64
 }
 #[godot_api]
 /**
@@ -116,6 +117,9 @@ impl INode3D for AutonomyNode{
         }
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
+
+        //let fps = Engine::get_max_fps(&self);
+        //godot_print!("GAME FPS= {}", fps);
     }
 
     fn input(&mut self, event: Gd < InputEvent >,) {
@@ -164,6 +168,7 @@ impl INode3D for AutonomyNode{
         //godot_print!("{}\n", delta);
         //Detect the collision point between the raycast and the rigidBodies in the scene
         //let mut imu_measurements= IMUData
+        self.dt += delta;
         let mut measurements= LidarMeasurements::new(true);
         let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
@@ -272,7 +277,10 @@ impl INode3D for AutonomyNode{
                     //IF the UDP module exist
                     if let Some(udp_worker)= &self.udp_worker && let Some(debug_udp) = &self.debug_worker {
                         if measurements.len() > 0 {
-                            if udp_worker.try_run() {
+                            //godot_print!("Elapsed Time= {}", self.dt);
+                            if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
+                                //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
+                                self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
                                         let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
@@ -280,36 +288,34 @@ impl INode3D for AutonomyNode{
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
                                         udp.publish_message(frame_imu.clone());
-                                        /*let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
                                         udp.publish_message(frame.clone());
-                                        godot_print!("Send LiDAR");*/
                                     },
                                     None => {
 
                                     },
                                 }
+                                udp_worker.force_run();
                             }
-                            /*if debug_udp.try_run() {
-                                match debug_udp.get_module().downcast_ref::<UDPChannel>() {
-                                    Some(dbg_udp) => {
-                                        let mut debug_frame= SOF.to_be_bytes().to_vec();
-                                        debug_frame.append(&mut (0 as u16).to_be_bytes().to_vec());
-                                        debug_frame.append(&mut ((DataChunk::DebugChunk as u16).to_be_bytes().to_vec()));
-                                        debug_frame.append(&mut (true_orientation.len() as u16 * 4).to_be_bytes().to_vec());
-                                        for i in 0..3 {
-                                            debug_frame.append(&mut f32::to_be_bytes(true_orientation[i]).to_vec());
-                                        }
-                                        let frame_size= u16::to_be_bytes(debug_frame.len() as u16);
-                                        debug_frame[2]= frame_size[0];
-                                        debug_frame[3]= frame_size[1];
-                                        godot_print!("SEND True Orientation: X= {} Y= {} Z= {}\n", true_orientation[0], true_orientation[1], true_orientation[2]);
-                                        godot_print!("{:?}\n", debug_frame);
-                                        dbg_udp.publish_message(debug_frame.clone());
+                            /*if udp_worker.try_run() {
+                                godot_print!("Elapsed Time= {}", self.dt);
+                                self.dt= 0.0;
+                                match udp_worker.get_module().downcast_ref::<UDPChannel>() {
+                                    Some(udp) => {
+                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        //godot_print!("Send IMU");
+                                        //godot_print!(" => {:?}\n", frame);
+                                        //godot_print!("= {:?}\n", frame);
+                                        udp.publish_message(frame_imu.clone());
+                                        let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        udp.publish_message(frame.clone());
                                     },
                                     None => {
+
                                     },
                                 }
-                            } */
+                            }*/
+                            
                         }
                         //udp.exec_main_task();
                     }

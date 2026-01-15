@@ -75,15 +75,13 @@ impl Worker {
                 //IF the time to start executing the task is reached or exceeded
                 if now >= *next_exec_instant {
                     //Compute the next trig time
-                    if let Some(new_next_exec_instant) = next_exec_instant.checked_add(Duration::from_millis((1000 / self.frequency) as u64)) {
-                        is_executed= true;
-                        //print!("NEW TRIG TIME => {} ", new_next_exec_instant.duration_since(now).as_millis());
-                        self.module.clone().exec_main_task();
-                        if let Ok(next_worker_event)= self.next_worker_event.try_lock() {
-                            next_worker_event.trig(());
-                        }
-                        *next_exec_instant= new_next_exec_instant;
+                    is_executed= true;
+                    //print!("NEW TRIG TIME => {} ", new_next_exec_instant.duration_since(now).as_millis());
+                    self.module.clone().exec_main_task();
+                    if let Ok(next_worker_event)= self.next_worker_event.try_lock() {
+                        next_worker_event.trig(());
                     }
+                    *next_exec_instant += Duration::from_millis((1000 / self.frequency) as u64);
                 }
             }
         } 
@@ -105,7 +103,6 @@ impl Worker {
             if let Ok(mut is_running) = self.is_thread_running.try_lock() {
                 *is_running= true;
             }
-            let mut starting_time= SystemTime::now();
             let module= self.module.clone();
             let next_worker_event= self.next_worker_event.clone();
             let freq= self.frequency;
@@ -117,20 +114,19 @@ impl Worker {
                 let mut next_exec_instant= Instant::now();
                 loop {
                     //IF the thread needs to be ended, we stop the thread loop
-                    if let Ok(is_running) = is_thread_running.clone().try_lock() {
+                    if let Ok(is_running) = is_thread_running.try_lock() {
                         if *is_running == false {
-                            println!("INFO: {} Dedicated Task Thread ENDED", name.clone());
+                            println!("INFO: {} Dedicated Task Thread ENDED", name);
                             break;
                         }
                     } 
                     if freq > 0 {
                         //The time at the module task execution
                         //let start_time= Instant::now();
-                        module.clone().exec_main_task();
+                        module.exec_main_task();
                         if let Ok(worker_publisher)= next_worker_event.try_lock() {
                             worker_publisher.trig(());
                         }
-
                         //let exec_duration= start_time.elapsed();
                         //let prev_exec_time= next_exec_instant.clone();
                         //Update of the time at the next module task execution
@@ -140,14 +136,18 @@ impl Worker {
                         if now < next_exec_instant {
                             //Sleep the remaining time before the next module execution time
                             thread::sleep(next_exec_instant - now);
-                            //println!("Elapsed Time= {:?} for {}", (Instant::now()- prev_exec_time), name);
+                            //println!("Elapsed Time= {:?} for {}", (Instant::now()- start_time), name);
                         } else {
                             next_exec_instant= now;
                         }
                     }
+                    module.exec_main_task();
+                    if let Ok(worker_publisher)= next_worker_event.try_lock() {
+                        worker_publisher.trig(());
+                    }
                 }
             });
-            if let Ok(worker_thread_guard)= self.task_thread.clone().try_lock() {
+            if let Ok(worker_thread_guard)= self.task_thread.try_lock() {
                 if let Some(mut worker_thread)= worker_thread_guard.as_ref() &&
                         let Ok(tsk_thread)= task_thread {
                     worker_thread= &tsk_thread;
@@ -198,9 +198,9 @@ impl Worker {
         return self.module.clone();
     }
 
-    /*pub fn get_module(&self) -> &dyn Module {
-        return self.get_module().clone().as_concrete();
-    }*/
+    pub fn get_frequency(&self) -> i64{
+        return self.frequency;
+    }
 }
 
 pub struct WorkerFactory {

@@ -109,8 +109,8 @@ impl MahonyFilter {
         }
         //Get the new euler orientation from the current orientation in Quaternion Frame
         let euler_angles= self.quaternion_orientation.to_euler_angles();
-        println!("Gyr,o Vector= {:?}", [imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]]);
-        println!("Global error {:?} Estimated Orientation= {:?}", error, [euler_angles.roll, euler_angles.pitch, euler_angles.yaw]);
+        //println!("Gyr,o Vector= {:?}", [imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]]);
+        //println!("Global error {:?} Estimated Orientation= {:?}", error, [euler_angles.roll, euler_angles.pitch, euler_angles.yaw]);
         return [euler_angles.roll, euler_angles.pitch, euler_angles.yaw];
     }
 }

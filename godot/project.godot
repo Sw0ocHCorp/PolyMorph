@@ -19,9 +19,19 @@ run/main_scene="uid://bdey3wykb1poq"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 
+[debug]
+
+settings/stdout/print_fps=true
+
 [dotnet]
 
 project/assembly_name="PolyMorph"
+
+[importer_defaults]
+
+animation_library={
+&"animation/fps": 50.0
+}
 
 [input]
 

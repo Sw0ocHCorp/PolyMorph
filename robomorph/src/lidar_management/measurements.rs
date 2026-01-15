@@ -1,26 +1,49 @@
-use crate::core::{messages::{DataChunk, Translatable}, utils};
+use core::f32;
+use std::io;
+
+use crate::{core::{messages::{DataChunk, Translatable}, utils::{self, euclidean_distance}}, positionning::pose::Pose};
 
 
 
 pub const LIDAR_ANGLES_CONFIG: u16= 0x000a;
 pub const LIDAR_MEASUREMENT: u16= 0x000b;
 pub const LIDAR_OBSTACLES: u16=0x000c;
+//Min distance between 2 obstales
+pub const OBSTACLE_THRESHOLD: f32= 1.0;
+pub const POINT_THRESHOLD: f32= 0.05;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LidarPoint {
     angle: f32,
     distance: f32,
-    location: (f32, f32),
+    location: [f32; 2],
     cluster_id: u32,
 }
 
 
 
 impl LidarPoint{
+    //Classic constructor, in body frame (localisation of the point from the lidar sensor)
     pub fn new(angle: f32, distance: f32) -> Self {
         let x= distance * angle.cos();
         let y= distance * angle.sin();
-        return Self { angle, distance, location: (x, y), cluster_id: 0 };
+        return Self { angle, distance, location: [x, y], cluster_id: 0 };
+    }
+
+    //Constructor in World Frame. Localisation from the robot Pose in World Frame
+    pub fn new_from_pose(angle: f32, distance: f32, origin_pose: Pose) -> Self {
+        let origin_location= origin_pose.get_location();
+        let orientation= origin_pose.get_orientation();
+        let location= [origin_location[0] + distance*f32::cos(angle + orientation[2]), 
+                                    origin_location[1] + distance*f32::sin(angle + orientation[2])];
+        return Self { angle, distance, location, cluster_id: 0 };
+    }
+
+    pub fn new_from_location(location: [f32; 2], pose: Pose) -> Self {
+        let origin= pose.get_location();
+        let angle= f32::atan2(location[1] - origin[1], location[0] - origin[0]);
+        let distance= euclidean_distance(vec![origin[0], origin[1]], location.to_vec());
+        return Self { angle, distance, location, cluster_id: 0};
     }
 
     pub fn set_id(&mut self, id: u32) {
@@ -30,50 +53,97 @@ impl LidarPoint{
     pub fn get_id(&self) -> u32 {
         return self.cluster_id;
     }
-    pub fn get_location(&self) -> (f32, f32) {
+    pub fn get_location(&self) -> [f32; 2] {
         return self.location;
     }
     pub fn get_angle(&self) -> f32 {
         return self.angle;
     }
+    pub fn get_distance(&self) -> f32 {
+        return self.distance;
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct LidarObject {
-    inner_pts: Vec<LidarPoint>,
+    x_min: f32,
+    y_min: f32,
+    x_max: f32,
+    y_max: f32,
+    //shape: [LidarPoint; 4],
     cluster_id: u32,
-    pub bound_index: usize
     
 }
 impl LidarObject {
-    fn new(cluster_id: u32, inner_pts: Vec<LidarPoint>) -> Self {
-        return Self { inner_pts: inner_pts, cluster_id: cluster_id, bound_index: 0}
-    }
-
-    pub fn new_empty(cluster_id: u32) -> Self {
-        return Self { inner_pts: Vec::new(), cluster_id: cluster_id, bound_index: 0}
-    }
-
-    pub fn add_inner_points(&mut self, mut pts: Vec<LidarPoint>) {
-        self.inner_pts.append(&mut pts);
+    pub fn new(cluster_id: u32, inner_pts: Vec<LidarPoint>, pose: Pose) -> Self {
+        let mut x_min= f32::INFINITY;
+        let mut x_max= -f32::INFINITY;
+        let mut y_min= f32::INFINITY;
+        let mut y_max= -f32::INFINITY;
+        for pt in inner_pts.clone() {
+            if pt.location[0] < x_min {
+                x_min= pt.location[0]
+            } else if pt.location[0] > x_max {
+                x_max= pt.location[0]
+            }
+            if pt.location[1] < y_min {
+                y_min= pt.location[1]
+            } else if pt.location[1] > y_max {
+                y_max= pt.location[1]
+            }
+        }
+        return Self { x_min: x_min, x_max: x_max, 
+                        y_min: y_min, y_max: y_max, cluster_id: cluster_id };
     }
     
-    pub fn add_inner_point(&mut self, pt: LidarPoint) {
-        self.inner_pts.push(pt);
+
+    pub fn new_empty(cluster_id: u32) -> Self {
+        return Self { x_min: 0.0, x_max: 0.0, 
+                        y_min: 0.0, y_max: 0.0, cluster_id: cluster_id };
     }
 
     pub fn get_id(&self) -> u32 {
         return self.cluster_id;
     }
 
-    pub fn get_inner_points(&self) -> Vec<LidarPoint> {
-        return self.inner_pts.clone();
+    pub fn get_bounds(&self) -> [f32; 4] {
+        return [self.x_min, self.y_min, self.x_max, self.y_max];
     }
 
-    pub fn get_bound_index(&self) -> usize {
-        return self.bound_index;
+    pub fn mix_objects(obj1: LidarObject, obj2: LidarObject) -> Option<Self> {
+        if LidarObject::is_intersecting(obj1.clone(), obj2.clone()) || LidarObject::is_contained(obj1.clone(), obj2.clone()){
+            return Some(LidarObject { x_min: f32::min(obj1.x_min, obj2.x_min), y_min: f32::min(obj1.y_min, obj2.y_min), 
+                            x_max: f32::max(obj1.x_max, obj2.x_max), y_max: f32::max(obj1.y_max, obj2.y_max), 
+                            cluster_id: u32::min(obj1.cluster_id, obj2.cluster_id) });
+        } else {
+            return None; 
+        }
+    }
+
+    pub fn compute_area(obj: LidarObject) -> f32 {
+        return (obj.x_max - obj.x_min) * (obj.y_max - obj.y_min);
+    }
+
+    pub fn is_intersecting(obj1: LidarObject, obj2: LidarObject) -> bool {
+        let x_min= f32::max(obj1.x_min, obj2.x_min);
+        let x_max= f32::min(obj1.x_max, obj2.x_max);
+        let y_min= f32::max(obj1.y_min, obj2.y_min);
+        let y_max= f32::min(obj1.y_max, obj2.y_max);
+        let x_area= f32::max(0.0, x_max-x_min);
+        let y_area= f32::max(0.0, y_max-y_min);
+        //println!("X AREA= {}    Y AREA= {} => AREA= {}", x_area, y_area, x_area*y_area);
+        return x_area * y_area > 0.0;
+    }
+
+    pub fn is_contained(obj1: LidarObject, obj2: LidarObject) -> bool {
+        let obj1_in_obj2= (obj1.x_min > obj2.x_min && obj1.y_min > obj2.y_min && obj1.x_max < obj2.x_max && obj1.y_max < obj2.y_max);
+        let obj2_in_obj1= (obj2.x_min > obj1.x_min && obj2.y_min > obj1.y_min && obj2.x_max < obj1.x_max && obj2.y_max < obj1.y_max);
+        /*println!("OBJ1 IN OBJ2= {}", obj1_in_obj2);
+        println!("OBJ2 IN OBJ1= {}", obj2_in_obj1);*/
+        return obj1_in_obj2 || obj2_in_obj1;
     }
 }
+
 
 #[derive(Debug, Clone)]
 pub struct LidarMeasurements {
@@ -206,12 +276,14 @@ impl Translatable for LidarMeasurements {
                 }
                 buffer.clear();
             } else if id == LIDAR_OBSTACLES {
-                if let Ok(arr) = bytes[i..i+2].try_into() {
-                    if data_size < 0 {
+                if data_size < 0 {
+                    if let Ok(arr) = bytes[i..i+2].try_into() {
                         data_size= u16::from_be_bytes(arr) as i32;
-                    } else {
-                        cluster_id += 1;
-                        let mut obj= LidarObject::new_empty(cluster_id);
+                        i+= 2;
+                    } 
+                } else {
+                    cluster_id += 1;
+                    /*if let Ok(arr) = bytes[i..i+2].try_into() {
                         obj.bound_index= u16::from_be_bytes(arr) as usize;
                         for n in bound_index..=obj.bound_index {
                             self.lidar_pts[n].cluster_id= cluster_id;
@@ -219,9 +291,8 @@ impl Translatable for LidarMeasurements {
                         }
                         bound_index= obj.bound_index+1;
                         self.lidar_objects.push(obj);
-                    }
+                    }*/
                 }
-                i+= 2;
                 buffer.clear();
             } else {
                 if utils::contain_bytes(buffer.clone(), LIDAR_ANGLES_CONFIG.to_be_bytes().to_vec()) >= 0{
@@ -266,13 +337,90 @@ impl Translatable for LidarMeasurements {
             frame.append(&mut f32::to_be_bytes(self.lidar_pts[i].distance).to_vec());
         }
         frame.append(&mut LIDAR_OBSTACLES.to_be_bytes().to_vec());
-        frame.append(&mut u16::to_be_bytes(self.lidar_objects.clone().len() as u16).to_vec());
+        frame.append(&mut u16::to_be_bytes((self.lidar_objects.clone().len()*16) as u16).to_vec());
         for obj in self.lidar_objects.clone() {
-            frame.append(&mut u16::to_be_bytes(obj.bound_index as u16).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_min).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_min).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_max).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_max).to_vec());
         }
         //let frame_size= u16::to_be_bytes(frame.len() as u16);
         //frame[2]= frame_size[0];
         //frame[3]= frame_size[1];
+        return frame;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LidarMap {
+    lidar_objects: Vec<LidarObject>,
+    closest_object: LidarObject,
+    closest_lidar_point: LidarPoint
+}
+
+impl LidarMap {
+    pub fn new() -> Self {
+        return Self { lidar_objects: Vec::new(), closest_object: LidarObject::new_empty(0),
+        closest_lidar_point: LidarPoint { angle: 0.0, distance: 0.0, location: [0.0, 0.0], cluster_id: 0 } };
+    }
+
+    pub fn update(&mut self, lidar_objects: Vec<LidarObject>, current_pose: Pose, closest_lidar_point: LidarPoint) {
+        self.closest_lidar_point= closest_lidar_point;
+        let mut unknown_objects= lidar_objects.clone();
+        //Iterate through the list of known lidar objects
+
+        for i in 0..self.lidar_objects.len() {
+            let existing_obj= self.lidar_objects[i].clone();
+            let mut j= 0;
+            //Will it remain unknown objects to process
+            while unknown_objects.len() > 0 && j < unknown_objects.len() {
+                let unknown_obj= unknown_objects[j].clone();
+                /*println!("===========================");
+                println!("Existing Object -> xMin: {} yMin: {} xMax: {} yMax: {}", existing_obj.x_min, existing_obj.y_min, existing_obj.x_max, existing_obj.y_max);
+                println!("Unknown Object -> xMin: {} yMin: {} xMax: {} yMax: {}", unknown_obj.x_min, unknown_obj.y_min, unknown_obj.x_max, unknown_obj.y_max);
+                println!("===========================");*/
+                //If the object shapes are colliding or nested
+                if LidarObject::is_contained(existing_obj.clone(), unknown_obj.clone()) || LidarObject::is_intersecting(existing_obj.clone(), unknown_obj.clone()){
+                    if LidarObject::compute_area(existing_obj.clone()) < LidarObject::compute_area(unknown_obj.clone()) {
+                        self.lidar_objects[i]= unknown_obj.clone();
+                    }
+                    unknown_objects.remove(j);
+                }
+                else {
+                    j += 1;
+                }
+            }
+        }
+        //Add all the unknown objects to the lidar map objects
+        self.lidar_objects.append(&mut unknown_objects);
+
+    }
+
+    pub fn clear(&mut self) {
+        self.lidar_objects.clear();
+        self.closest_object= LidarObject::new_empty(0)
+    }
+
+    pub fn get_closest_object(&self) -> LidarObject {
+        return self.closest_object.clone();
+    }
+}
+
+impl Translatable for LidarMap {
+    fn fill_from_bytes(&mut self, bytes: Vec<u8>) -> usize {
+        return 0;
+    }
+
+    fn to_bytes(&mut self) -> Vec<u8> {
+        let mut frame= (DataChunk::LidarScanChunk as u16).to_be_bytes().to_vec();
+        frame.append(&mut LIDAR_OBSTACLES.to_be_bytes().to_vec());
+        frame.append(&mut ((self.lidar_objects.len()*16) as u16).to_be_bytes().to_vec());
+        for obj in self.lidar_objects.clone() {
+            frame.append(&mut f32::to_be_bytes(obj.x_min).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_min).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_max).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_max).to_vec());
+        }
         return frame;
     }
 }
