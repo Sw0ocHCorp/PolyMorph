@@ -53,7 +53,7 @@ impl LidarPerceptionManager {
         let lidar_objects= self.object_detection_solver.detect_objects(&mut lidar_measurements, pose.clone());
         if lidar_objects.len() > 0 {
             //Compute the closest point to get this data for potential obstacle avoidance
-            let mut closest_point= [f32::INFINITY, f32::INFINITY];
+            let mut closest_point= [f64::INFINITY, f64::INFINITY];
             for pt in lidar_measurements.get_all_measurements() {
                 let pt_loc= pt.get_location();
                 let origin= pose.get_location();

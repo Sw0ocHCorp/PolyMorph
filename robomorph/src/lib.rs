@@ -15,11 +15,11 @@ mod test_utils_functions {
     fn it_works() {
         let tests = [
             0.0,
-            std::f32::consts::PI / 2.0,
-            std::f32::consts::PI,
-            3.5 * std::f32::consts::PI,
-            -1.0 * std::f32::consts::PI,
-            -2.7 * std::f32::consts::PI,
+            std::f64::consts::PI / 2.0,
+            std::f64::consts::PI,
+            3.5 * std::f64::consts::PI,
+            -1.0 * std::f64::consts::PI,
+            -2.7 * std::f64::consts::PI,
         ];
 
         for &v in &tests {

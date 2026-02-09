@@ -2,8 +2,9 @@ use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, System
 
 use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
+use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData}};
 
+const ORIGIN_GPS_DATA: GPSData= GPSData{longitude: 5.7932940640423904, latitude: 43.25157380084422};
 
 #[derive(GodotClass)]
 #[class(init, base=Node3D)]
@@ -20,7 +21,9 @@ pub struct AutonomyNode {
     last_linear_vel: Vector3,
     world_magnetic_field: Vector3,
     data_fps: u32,
-    dt: f64
+    gps_frequency: u32,
+    dt: f64,
+    gps_dt: f64
 }
 #[godot_api]
 /**
@@ -115,6 +118,21 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
             self.data_fps= 10;
         }
+        if self.base().has_meta("gpsFrequency") {
+            match self.base().get_meta("gpsFrequency").try_to::<u32>() {
+                Ok(data_frequency) => {
+                    self.gps_frequency= data_frequency;
+                    godot_print!("Loading gpsFrequency metadata succesful, It's value is= {}", data_frequency);
+                },
+                Err(_) => {
+                    godot_print!("/!\\ ERROR: gpsFrequency conversion in f32 failed.\nYou should change the metadata type in u32");
+                    self.gps_frequency= 1;
+                },
+            } 
+        } else {
+            godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
+            self.data_fps= 10;
+        }
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
 
@@ -169,6 +187,7 @@ impl INode3D for AutonomyNode{
         //Detect the collision point between the raycast and the rigidBodies in the scene
         //let mut imu_measurements= IMUData
         self.dt += delta;
+        self.gps_dt += delta;
         let mut measurements= LidarMeasurements::new(true);
         let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
@@ -202,19 +221,19 @@ impl INode3D for AutonomyNode{
                     // Godot -Z -> IMU Y (Left) - This maintains a Right-Handed System
                     imu_data = IMUData {
                         accel: [
-                            local_accel.x, 
-                            -local_accel.z, 
-                            local_accel.y
+                            local_accel.x as f64, 
+                            -local_accel.z as f64, 
+                            local_accel.y as f64
                         ], 
                         gyro: [
-                            local_gyro.x, 
-                            -local_gyro.z, 
-                            local_gyro.y
+                            local_gyro.x as f64, 
+                            -local_gyro.z as f64, 
+                            local_gyro.y as f64
                         ],
                         magnetic_field: [
-                            local_mag.x, 
-                            -local_mag.z, 
-                            local_mag.y
+                            local_mag.x as f64, 
+                            -local_mag.z as f64, 
+                            local_mag.y as f64
                         ]
                     };
                     //godot_print!("IMU Data:\n{:?}", imu_data);
@@ -256,7 +275,7 @@ impl INode3D for AutonomyNode{
                                                     if distance < 0.0 {
                                                         godot_print!("Error: Negative distance detected");
                                                     }
-                                                    measurements.insert(angle.to_degrees() as f32, distance);
+                                                    measurements.insert(angle.to_degrees(), distance as f64);
                                                     //measurements.push(origin.distance_to(pos));
                                                 },
                                                 Err(_) => {
@@ -283,11 +302,18 @@ impl INode3D for AutonomyNode{
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
-                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let gps_data= utils::local_to_global_frame(ORIGIN_GPS_DATA, robot.get_global_position().x as f64, robot.get_global_position().y as f64);
+                                        if self.gps_dt >= 1.0 / self.gps_frequency as f64 {
+                                            let mut gps_frame= messages::convert_to_frame(vec![Box::new(gps_data)]);
+                                            udp.publish_message(gps_frame);
+                                            self.gps_dt= 0.0;
+                                        }
+                                        let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
-                                        udp.publish_message(frame_imu.clone());
+                                        udp.publish_message(imu_frame.clone());
                                         let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
                                         udp.publish_message(frame.clone());
                                     },
@@ -302,11 +328,11 @@ impl INode3D for AutonomyNode{
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
-                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
-                                        udp.publish_message(frame_imu.clone());
+                                        udp.publish_message(imu_frame.clone());
                                         let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
                                         udp.publish_message(frame.clone());
                                     },

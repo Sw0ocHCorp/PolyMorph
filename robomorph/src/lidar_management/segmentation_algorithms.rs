@@ -7,13 +7,13 @@ pub trait SegmentationAlgorithm: Send + Sync {
 
 //Classic Solver based on DBSCAN algorithm
 pub struct ClassicSolver {
-    distance_threshold: f32,
+    distance_threshold: f64,
     min_pts_object: usize,
-    distance_function: Box<dyn Fn(LidarPoint, LidarPoint) -> f32 + Send + Sync>,
+    distance_function: Box<dyn Fn(LidarPoint, LidarPoint) -> f64 + Send + Sync>,
 }
 
 impl ClassicSolver {
-    pub fn new(distance_threshold: f32, min_pts_object: usize, distance_function: Box<dyn Fn(LidarPoint, LidarPoint) -> f32 + Send + Sync>) -> Self {
+    pub fn new(distance_threshold: f64, min_pts_object: usize, distance_function: Box<dyn Fn(LidarPoint, LidarPoint) -> f64 + Send + Sync>) -> Self {
         return Self { distance_threshold, min_pts_object, distance_function };
     }
     pub fn get_neighbours_idxs(&self, target_pt_idx: usize, lidar_pts: Vec<LidarPoint>) -> Vec<usize> {

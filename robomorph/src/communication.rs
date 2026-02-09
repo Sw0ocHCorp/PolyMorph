@@ -1,7 +1,6 @@
-use core::error;
-use std::{io::{self, Error}, net::{self, UdpSocket}, sync::{Arc, Mutex}};
+use std::{io::{self, Error}, net::UdpSocket, sync::{Arc, Mutex}};
 
-use socket2::{Socket, SockRef};
+use socket2::SockRef;
 
 use crate::core::{event_management::{Event, Observer}, worker::Module};
 

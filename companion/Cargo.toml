@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 robomorph= {path= "../robomorph"}
-ndarray = "0.17.1"
+faer = "0.24.0"
+num-quaternion = "1.0.7"

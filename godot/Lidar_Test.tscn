@@ -76,6 +76,7 @@ metadata/motionFactor = 3.0
 metadata/maxNoiseDistance = 0.0
 metadata/lidarAngleOffset = 0.0
 metadata/dataFrequency = 85
+metadata/gpsFrequency = 5
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.0003733635, 0, 0)
