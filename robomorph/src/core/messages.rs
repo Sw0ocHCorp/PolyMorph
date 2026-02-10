@@ -76,6 +76,9 @@ pub fn parse_frame(frame: Vec<u8>) -> Vec<Box<dyn Translatable>> {
                                 let mut imu_data= IMUData::new();
                                 chunk_size= imu_data.fill_from_bytes(raw_frame.clone());
                                 translatables.push(Box::new(imu_data));
+                                if chunk_size > raw_frame.len() {
+                                    let test= 1;
+                                }
                                 raw_frame.drain(..chunk_size);
                                 buffer.clear();
                             }

@@ -133,10 +133,10 @@ impl OrientationUKF {
         let (predicted_state, state_covariance)= self.predict(&self.current_state, &meas.input_sensor_measurements, meas.delta_time, &self.state_covariance);
         self.current_state= predicted_state.clone();
         println!("Predicted State= {:?} | State Covariance= {:?}", self.current_state, state_covariance);
-        /*let (true_state, update_state_cov)= self.update_prediction(&predicted_state, &meas.ref_sensor_measurements, &state_covariance);
+        let (true_state, update_state_cov)= self.update_prediction(&predicted_state, &meas.ref_sensor_measurements, &state_covariance);
         self.state_covariance= update_state_cov;
-        self.current_state= true_state.clone();*/
-        //println!("Updated State= {:?} | Ref Sensor= {:?} | State Covariance= {:?}", self.current_state, meas.ref_sensor_measurements, self.state_covariance);
+        self.current_state= true_state.clone();
+        println!("Updated State= {:?} | Ref Sensor= {:?} | State Covariance= {:?}", self.current_state, meas.ref_sensor_measurements, self.state_covariance);
         return predicted_state;
     }
 }

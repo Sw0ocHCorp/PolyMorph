@@ -75,7 +75,7 @@ metadata/lidarFov = 180
 metadata/motionFactor = 3.0
 metadata/maxNoiseDistance = 0.0
 metadata/lidarAngleOffset = 0.0
-metadata/dataFrequency = 85
+metadata/dataFrequency = 60
 metadata/gpsFrequency = 5
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]

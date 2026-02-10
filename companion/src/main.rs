@@ -246,7 +246,7 @@ fn main() {
     let binding = UQ64::from_euler_angles(0.0, 0.0, 0.0);
     let init_quat= binding.as_quaternion();
     let ukf_imu= OrientationUKF::new(col![init_quat.w, init_quat.x, init_quat.y, init_quat.z], 
-                                                                    measurement_noise.cloned(), sate_process_noise, 0.1, 2.0);
+                                                                    measurement_noise.cloned(), sate_process_noise, 1.0, 2.0);
     let pose_filter= FiltersManager::new(20.0, 0.01, 3.25, 10.0, 1.0/60.0, ukf_imu);
     let classic_solver= Arc::new(ClassicSolver::new( 0.10, 2,
         Box::new(|p1, p2|{

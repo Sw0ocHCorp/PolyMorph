@@ -147,6 +147,12 @@ impl INode3D for AutonomyNode{
                 if button_event.get_button_index() == JoyButton::A {
                     self.motion_command= [0.0, 0.0];
                 }
+                if button_event.get_button_index() == JoyButton::X {
+                    self.motion_command= [0.0, 1.0];
+                }
+                if button_event.get_button_index() == JoyButton::B {
+                    self.motion_command= [0.0, -1.0];
+                }
                 //godot_print!("Joypad button detected: {:?}\n", button_event.get_button_index());
             },
             Err(_) => {
@@ -158,16 +164,16 @@ impl INode3D for AutonomyNode{
                 let value= joypad_event.get_axis_value();
                 if value.abs() > 0.2 {
                     if joypad_event.get_axis() == JoyAxis::LEFT_X {
-                        self.motion_command[1]= -value;
+                        self.motion_command[1]= -1.0;
                     } 
                     if joypad_event.get_axis() == JoyAxis::LEFT_Y {
-                        self.motion_command[0]= -value;
+                        self.motion_command[0]= -1.0;
                     }
                     if joypad_event.get_axis() == JoyAxis::RIGHT_X {
-                        self.motion_command[1]= value;   
+                        self.motion_command[1]= 1.0;   
                     }
                     if joypad_event.get_axis() == JoyAxis::RIGHT_Y {
-                        self.motion_command[0]= value;
+                        self.motion_command[0]= 1.0;
                     }
 
                 } else {
@@ -298,6 +304,9 @@ impl INode3D for AutonomyNode{
                         if measurements.len() > 0 {
                             //godot_print!("Elapsed Time= {}", self.dt);
                             if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
+                                if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
+                                    godot_print!("Send Late\n")
+                                }
                                 //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
@@ -314,8 +323,8 @@ impl INode3D for AutonomyNode{
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
                                         udp.publish_message(imu_frame.clone());
-                                        let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
-                                        udp.publish_message(frame.clone());
+                                        /*let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        udp.publish_message(frame.clone());*/
                                     },
                                     None => {
 

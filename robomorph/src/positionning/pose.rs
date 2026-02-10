@@ -84,7 +84,7 @@ impl Translatable for IMUData {
             buffer.push(bytes[i]);
             if id == IMU_ACCEL {
                 for j in 0..3 {
-                    if let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.accel[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
@@ -93,7 +93,7 @@ impl Translatable for IMUData {
                 buffer.clear();
             } else if id == IMU_GYRO {
                 for j in 0..3 {
-                    if let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.gyro[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
@@ -102,7 +102,7 @@ impl Translatable for IMUData {
                 buffer.clear();
             } else if id == IMU_MAGNETIC_FIELD {
                 for j in 0..3 {
-                    if let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.magnetic_field[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
