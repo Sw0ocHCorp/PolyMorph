@@ -208,7 +208,7 @@ impl INode3D for AutonomyNode{
                     true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
-                    let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
+                    let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) + robot.get_gravity();
                     self.last_linear_vel = robot.get_linear_velocity();
 
                     // 2. Get Rotation and Angular Velocity
@@ -217,7 +217,7 @@ impl INode3D for AutonomyNode{
 
                     // 3. Bring World Vectors into the Robot's Local Body Frame
                     // Godot's '*' operator for Quaternions/Vectors handles the rotation.
-                    let local_accel = robot_q.inverse() * godot_linear_accel;
+                    let mut local_accel = robot_q.inverse() * godot_linear_accel;
                     let local_mag   = robot_q.inverse() * self.world_magnetic_field;
                     let local_gyro  = robot_q.inverse() * godot_angular_vel; // If angular_vel is in world coords
 
@@ -225,6 +225,7 @@ impl INode3D for AutonomyNode{
                     // Godot X -> IMU X (Forward)
                     // Godot Y -> IMU Z (Up)
                     // Godot -Z -> IMU Y (Left) - This maintains a Right-Handed System
+                    local_accel= local_accel.normalized();
                     imu_data = IMUData {
                         accel: [
                             local_accel.x as f64, 
@@ -242,7 +243,7 @@ impl INode3D for AutonomyNode{
                             local_mag.y as f64
                         ]
                     };
-                    //godot_print!("IMU Data:\n{:?}", imu_data);
+                    godot_print!("IMU Data:\n{:?}", imu_data);
                     //Compute the velocities to apply to the robot from the joystick input
                     //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
                     let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };
@@ -304,9 +305,9 @@ impl INode3D for AutonomyNode{
                         if measurements.len() > 0 {
                             //godot_print!("Elapsed Time= {}", self.dt);
                             if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
-                                if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
+                                /*if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
                                     godot_print!("Send Late\n")
-                                }
+                                }*/
                                 //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {

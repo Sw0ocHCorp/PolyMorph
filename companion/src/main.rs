@@ -3,7 +3,7 @@ mod filtering;
 use std::{sync::{Arc, Mutex}, thread};
 use faer::{Col, Mat, col, mat};
 use num_quaternion::{Q64, Quaternion, UQ64};
-use robomorph::{communication::UDPChannel, core::{event_management::{Event, Observer}, messages, worker::{Module, WorkerFactory}}, filtering::{kalman_filter::{KalmanMeasurements, UnscentedKalmanFilter}, mahony_filter::MahonyFilter}, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::{LidarMap, LidarMeasurements}, segmentation_algorithms::ClassicSolver}, positionning::pose::{GPSData, IMUData, Pose}};
+use robomorph::{communication::UDPChannel, core::{event_management::{Event, Observer}, file_logger::FileLogger, messages, worker::{Module, WorkerFactory}}, filtering::{kalman_filter::{KalmanMeasurements, UnscentedKalmanFilter}, mahony_filter::MahonyFilter}, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::{LidarMap, LidarMeasurements}, segmentation_algorithms::ClassicSolver}, positionning::pose::{GPSData, IMUData, Pose}};
 
 use crate::filtering::imu_ukf::OrientationUKF;
 
@@ -223,6 +223,7 @@ fn main() {
 
     });*/
 
+    let state_covariance= Mat::<f64>::identity(3, 3)*0.01;
     //Q matrix => Noise of the state that comes with the sensor input measurements (gyrometer)
     let sate_process_noise= Mat::<f64>::identity(3, 3)*0.001;
 
@@ -245,8 +246,8 @@ fn main() {
     //UKF for orientation estimation
     let binding = UQ64::from_euler_angles(0.0, 0.0, 0.0);
     let init_quat= binding.as_quaternion();
-    let ukf_imu= OrientationUKF::new(col![init_quat.w, init_quat.x, init_quat.y, init_quat.z], 
-                                                                    measurement_noise.cloned(), sate_process_noise, 1.0, 2.0);
+    let ukf_imu= OrientationUKF::new(col![init_quat.w, init_quat.x, init_quat.y, init_quat.z], state_covariance,
+                                                                    measurement_noise.cloned(), sate_process_noise, 0.1, 2.0);
     let pose_filter= FiltersManager::new(20.0, 0.01, 3.25, 10.0, 1.0/60.0, ukf_imu);
     let classic_solver= Arc::new(ClassicSolver::new( 0.10, 2,
         Box::new(|p1, p2|{

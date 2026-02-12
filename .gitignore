@@ -15,3 +15,7 @@ robomorph/target/
 controller/target/
 
 *.lock
+
+companion/Logs/
+
+robomorph/Logs/

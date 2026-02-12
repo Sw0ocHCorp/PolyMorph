@@ -120,7 +120,7 @@ mod test_com_interface {
 }
 
 mod test_serialization_deserialization {
-    use crate::{lidar_management::measurements::LidarMeasurements, core::messages::{self, Translatable}};
+    use crate::{core::messages::{self, Translatable}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
 
 
 
@@ -181,6 +181,11 @@ mod test_serialization_deserialization {
                               88, 65, 20, 65, 88, 44, 231, 65, 88, 38, 88, 65, 88, 45, 100, 65, 88, 66, 15, 65, 88, 100, 96, 65, 88, 68, 76, 65, 88, 45, 65, 65, 88, 35,
                                215, 65, 88, 40, 9, 65, 88, 57, 213, 64, 143, 137, 223, 64, 143, 82, 205, 64, 143, 37, 2, 64, 143, 0, 115, 64, 142, 229, 16, 64, 142, 210, 212, 64, 142, 201, 183];
         let translatables= messages::parse_frame(test_frame);
+        let mut imu_measurements= IMUData { accel: [-3.8307167415041476e-5, 4.544490002444945e-5, 1.0], gyro: [0.0, -0.0, 0.0], magnetic_field: [1.0, 7.510474824812263e-5, 8.637951395940036e-5] };
+        println!("{:?}", imu_measurements.to_bytes());
+        let mut imu= IMUData::new();
+        let _= imu.fill_from_bytes(imu_measurements.to_bytes());
+        println!("{:?}", imu);
         for translatable in translatables {
             println!("TRANSLATABLE: "); 
             match translatable.downcast_ref::<LidarMeasurements>() {
@@ -192,5 +197,16 @@ mod test_serialization_deserialization {
                 },
             }
         }
+    }
+}
+
+mod test_logs {
+    use crate::core::file_logger::FileLogger;
+
+ 
+    #[test]
+    fn it_works() {
+        let logger= FileLogger::new("Logs".to_string());
+        logger.add_logs("COUCOU".to_string());
     }
 }

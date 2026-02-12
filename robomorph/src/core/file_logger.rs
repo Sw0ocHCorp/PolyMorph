@@ -1,4 +1,4 @@
-use std::{fs::{File, create_dir}, io};
+use std::{fs::{File, create_dir}, io::{self, Write}};
 
 use chrono::Local;
 
@@ -11,21 +11,37 @@ pub struct FileLogger {
 }
 
 impl FileLogger {
-    fn new(folder_path: String) -> Self {
+    pub fn new(folder_path: String) -> Self {
         match (create_dir(&folder_path)) {
             Ok(_) => println!("Create Directory"),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists=> println!("Directory already Exist"), 
             Err(e) => println!("Failed to create directory: {}", e)
         }
-        let file_name= LOGS_FILE_NAME.to_string() + &Local::now().to_string();
-        match File::create(file_name) {
+        let now = Local::now().format("%Y-%m-%d_%H-%M-%S%.f").to_string();
+;
+        /*if let Some(idx)= now.find(" +") {
+            let _= now.split_off(idx);
+            now= now.replace(".", ",").replace(" ", "|").replace(":", "-").replace("-", "_");
+        }*/
+        let file_name= LOGS_FILE_NAME.to_string() + "_" + &now + ".txt";
+        let file_path= folder_path.clone()+ "/" + &file_name.clone();
+        match File::create(&file_path) {
             Ok(file) => {
-                return Self { folder_path: folder_path, file_name:  LOGS_FILE_NAME.to_string() + &Local::now().to_string(), file: Some(file)};
+                return Self { folder_path: folder_path, file_name:  file_name.clone(), file: Some(file)};
             },
-            Err(_) => {
-                return Self { folder_path: folder_path, file_name:  LOGS_FILE_NAME.to_string() + &Local::now().to_string(), file: None};
+            Err(e) => {
+                println!("{} for {}", e.kind(), file_name);
+                return Self { folder_path: folder_path, file_name:  file_name, file: None};
             },
         }
         
+    }
+
+    pub fn add_logs(&self, content: String) {
+        if let Some(mut file) = self.file.as_ref() {
+            if let Err(_)= file.write(content.as_bytes()) {
+                println!("Error writing logs");
+            }
+        }
     }
 }

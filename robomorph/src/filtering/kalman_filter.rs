@@ -51,14 +51,14 @@ pub trait UnscentedKalmanFilter {
             sigma_points[i]= Self::apply_transition_function(&sigma_points[i], &input_measurements, delta_time)
         }
         println!("Transformed sigma points= {:?}", sigma_points);
-        let mut predicted_state= self.compute_mean_points(sigma_points.clone());
+        let mut predicted_state= self.compute_mean_points(sigma_points.clone(), 0.55);
         println!("Mean point= {:?}", predicted_state);
-        let state_cov= self.update_state_covariance_from_predict(&predicted_state, &sigma_points, state_covariance);
+        let state_cov= self.update_state_covariance_from_predict(&predicted_state, &sigma_points, state_covariance, 0.55);
         
         return (predicted_state, state_cov);
     }
 
-    fn update_state_covariance_from_predict(&self, mean_point: &Col<f64>, sigma_points: &Vec<Col<f64>>, state_covariance: &Mat<f64>) -> Mat::<f64> {
+    fn update_state_covariance_from_predict(&self, mean_point: &Col<f64>, sigma_points: &Vec<Col<f64>>, state_covariance: &Mat<f64>, w0: f64) -> Mat::<f64> {
         let nrows= state_covariance.nrows() as f64;
         let spread_factor= self.get_spread_factor();
         let prior_knowledge= self.get_prior_knowledge();
@@ -69,12 +69,8 @@ pub trait UnscentedKalmanFilter {
         let scale= nrows + scale_factor;
         //Compute the state covariance (uncertainty in the state variables)
         let mut state_cov= Mat::<f64>::zeros(state_covariance.nrows(), state_covariance.ncols());
-        for i in 0..sigma_points.len() {
-            let mut weight= 1.0/(2.0*scale);
-            if i == 0 {
-                weight= (scale_factor / scale) + (1.0 - spread_factor.powf(2.0) + prior_knowledge)
-            }
-            println!("Weight= {:?}", weight);
+        for i in 1..sigma_points.len() {
+            let weight= (1.0-w0)/(sigma_points.len() as f64 -1.0);
             //Compute the "distance" between the sigma points and the center of the distribution
             let diff= (&sigma_points[i] - mean_point);
             println!("Dist Sigma point Mean point= {:?}", diff);
@@ -107,9 +103,9 @@ pub trait UnscentedKalmanFilter {
         }
         println!("Transformed sigma points= {:?}", transformed_sigma_points);
         //Compute the mean points of the theoric sensor measurements at time T
-        let measured_state= self.compute_mean_points(transformed_sigma_points.clone());
+        let measured_state= self.compute_mean_points(transformed_sigma_points.clone(), 0.55);
         println!("Mean point= {:?}", measured_state);
-        let (innovation_covariance, cross_covariance)= self.compute_cross_innov_covariances(&base_sigma_points, &transformed_sigma_points, &predicted_state, &measured_state, &state_covariance);
+        let (innovation_covariance, cross_covariance)= self.compute_cross_innov_covariances(&base_sigma_points, &transformed_sigma_points, &predicted_state, &measured_state, &state_covariance, 0.55);
         //Computation of the Kalman Gain:
         //  Model the confidence tradeoff between the predict state and the ref sensor measurements 
         let binding = innovation_covariance.clone().qr().solve(cross_covariance.clone().transpose());
@@ -130,7 +126,7 @@ pub trait UnscentedKalmanFilter {
         return (final_state, state_cov);
     }
 
-    fn compute_cross_innov_covariances(&self, base_sigma_points: &Vec<Col<f64>>, transformed_sigma_points: &Vec<Col<f64>>, predicted_state: &Col<f64>, measured_state: &Col<f64>, state_covariance: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
+    fn compute_cross_innov_covariances(&self, base_sigma_points: &Vec<Col<f64>>, transformed_sigma_points: &Vec<Col<f64>>, predicted_state: &Col<f64>, measured_state: &Col<f64>, state_covariance: &Mat<f64>, w0: f64) -> (Mat<f64>, Mat<f64>) {
         let nrows= state_covariance.nrows() as f64;
         let spread_factor= self.get_spread_factor();
         let prior_knowledge= self.get_prior_knowledge();
@@ -144,11 +140,8 @@ pub trait UnscentedKalmanFilter {
         //  The uncertainty of the theoric ref sensor measurements
         let mut innovation_covariance= Mat::<f64>::zeros(measured_state.nrows(), measured_state.nrows());
         //Computation of the covariances
-        for i in 0..base_sigma_points.len() {
-            let mut weight= 1.0/(2.0*scale);
-            if i == 0 {
-                weight= (scale_factor / scale) + (1.0 - spread_factor.powf(2.0) + prior_knowledge)
-            }
+        for i in 1..base_sigma_points.len() {
+            let weight= (1.0-w0)/(base_sigma_points.len() as f64 -1.0);
             innovation_covariance += weight * (&transformed_sigma_points[i] - measured_state)*(&transformed_sigma_points[i] - measured_state).transpose();
             cross_covariance += weight * (&base_sigma_points[i] - predicted_state)*(&transformed_sigma_points[i] - measured_state).transpose()
         }
@@ -181,22 +174,13 @@ pub trait UnscentedKalmanFilter {
         return sigma_points;
     }
 
-    fn compute_mean_points(&self, sigma_points: Vec<Col<f64>>) -> Col<f64> {
+    fn compute_mean_points(&self, sigma_points: Vec<Col<f64>>, w0: f64) -> Col<f64> {
         let nrows= sigma_points[0].nrows() as f64;
-        let mut mean_point= Col::<f64>::zeros(nrows as usize);
-        //The scale factor determine how far from the mean point the sigma point is placed
-        //  IF the spread factor is small, the sigma points will be close to the mean point(center point)
-        let scale_factor= self.get_spread_factor().powf(2.0)*(nrows + KAPPA) - nrows;
-        let scale= nrows + scale_factor;
+        let mut mean_point= w0 * &sigma_points[0];
         //Compute the mean point / state
-        for i in 0..sigma_points.len() {
-            //Compute the weights for the given point (weights for the center point is differents than the other points of the distribution)
-            let mut weight_m= 1.0/(2.0*scale);
-            if i == 0 {
-                weight_m= (scale_factor / scale);
-            }
+        for i in 1..sigma_points.len() {
             //Computation of the mean point / state with a weighted mean computation
-            mean_point+= weight_m * &sigma_points[i];
+            mean_point+= (1.0-w0)/(sigma_points.len() as f64-1.0) * &sigma_points[i];
         }
         return mean_point;
     }

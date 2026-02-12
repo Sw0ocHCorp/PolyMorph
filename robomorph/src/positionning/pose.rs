@@ -140,7 +140,7 @@ impl Translatable for IMUData {
         }
         frame.append(&mut IMU_MAGNETIC_FIELD.to_be_bytes().to_vec());
         for i in 0..3 {
-            frame.append(&mut f64::to_be_bytes(self.magnetic_field[i] as f64).to_vec());
+            frame.append(&mut f32::to_be_bytes(self.magnetic_field[i] as f32).to_vec());
         }
         return frame;
     }
