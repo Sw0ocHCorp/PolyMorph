@@ -30,7 +30,7 @@ impl FiltersManager {
             if let Ok(mut ukf)= filter_manager.ukf_imu.try_lock() {
                 let state= ukf.estimate_true_state(KalmanMeasurements{input_sensor_measurements: col![imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]], 
                                                                                             ref_sensor_measurements: col![imu_data.accel[0], imu_data.accel[1], imu_data.accel[2], 
-                                                                                                                            imu_data.magnetic_field[0], imu_data.magnetic_field[1], imu_data.magnetic_field[2]],delta_time: dt});
+                                                                                                                            imu_data.magnetic_field[0], imu_data.magnetic_field[1], imu_data.magnetic_field[2]],delta_time: imu_data.elapsed_time});
                 let quat_state= Q64::new(state[0], state[1], state[2], state[3]);
                 if let Some(unit_quat)= quat_state.normalize() && let Ok(data_event)= filter_manager.clone().data_filtered_event.try_lock() {
                     let pose= Pose::new(GPSData{latitude: 0.0, longitude: 0.0}, [0.0, 0.0, 0.0], 
@@ -225,7 +225,7 @@ fn main() {
 
     let state_covariance= Mat::<f64>::identity(3, 3)*0.01;
     //Q matrix => Noise of the state that comes with the sensor input measurements (gyrometer)
-    let sate_process_noise= Mat::<f64>::identity(3, 3)*0.001;
+    let sate_process_noise= Mat::<f64>::identity(3, 3)*0.01;
 
     //R matrix => Noise of the ref sensors (Accelerometer and Magnetometer)
     let mut bind = Mat::<f64>::identity(6, 6);

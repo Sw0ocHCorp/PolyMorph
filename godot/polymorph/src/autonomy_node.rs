@@ -5,6 +5,7 @@ use ordered_float::OrderedFloat;
 use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData}};
 
 const ORIGIN_GPS_DATA: GPSData= GPSData{longitude: 5.7932940640423904, latitude: 43.25157380084422};
+const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
 
 #[derive(GodotClass)]
 #[class(init, base=Node3D)]
@@ -34,7 +35,8 @@ impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
         //let test= vec![]
-        self.world_magnetic_field= Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+        self.world_magnetic_field= Vector3 { x: REF_WORLD_MAGNETIC_FIELD[0] as f32, y: REF_WORLD_MAGNETIC_FIELD[2] as f32, z: REF_WORLD_MAGNETIC_FIELD[1] as f32 };
+        self.world_magnetic_field= self.world_magnetic_field.normalized();
         let udp= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090);
         let udp_debug= UDPChannel::new_async("127.0.0.1", 9010, "127.0.0.1", 9000);
         //Get and store the metadata of the 
@@ -208,7 +210,8 @@ impl INode3D for AutonomyNode{
                     true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
-                    let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) + robot.get_gravity();
+                    let mut godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
+                    godot_linear_accel /= robot.get_gravity().y.abs();
                     self.last_linear_vel = robot.get_linear_velocity();
 
                     // 2. Get Rotation and Angular Velocity
@@ -225,7 +228,7 @@ impl INode3D for AutonomyNode{
                     // Godot X -> IMU X (Forward)
                     // Godot Y -> IMU Z (Up)
                     // Godot -Z -> IMU Y (Left) - This maintains a Right-Handed System
-                    local_accel= local_accel.normalized();
+                    //local_accel= local_accel.normalized();
                     imu_data = IMUData {
                         accel: [
                             local_accel.x as f64, 
@@ -241,8 +244,10 @@ impl INode3D for AutonomyNode{
                             local_mag.x as f64, 
                             -local_mag.z as f64, 
                             local_mag.y as f64
-                        ]
+                        ],
+                        elapsed_time: self.dt
                     };
+                    godot_print!("Linear Accel:\n{:?}", godot_linear_accel);
                     godot_print!("IMU Data:\n{:?}", imu_data);
                     //Compute the velocities to apply to the robot from the joystick input
                     //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
@@ -319,7 +324,11 @@ impl INode3D for AutonomyNode{
                                             self.gps_dt= 0.0;
                                         }
                                         let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
-                                        
+                                        //debug_udp= rob_orientation.to_string();
+                                        match debug_udp.get_module().downcast_ref::<UDPChannel>() {
+                                            Some(udp_debug)=>{udp_debug.publish_message(Vec::from(rob_orientation.to_string()));}
+                                            None => todo!(),
+                                        }
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
@@ -332,6 +341,7 @@ impl INode3D for AutonomyNode{
                                     },
                                 }
                                 udp_worker.force_run();
+                                debug_udp.force_run();
                             }
                             /*if udp_worker.try_run() {
                                 godot_print!("Elapsed Time= {}", self.dt);

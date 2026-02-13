@@ -4,8 +4,8 @@ use faer::{Col, Mat, col, mat, matrix_free::LinOp, prelude::Solve, traits::math_
 use num_quaternion::{Q64, Quaternion, UnitQuaternion};
 use robomorph::{core::file_logger::FileLogger, filtering::kalman_filter::{self, KalmanMeasurements, UnscentedKalmanFilter}};
 
-const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [1.0, 0.0, 0.0];
-const REF_REST_ACCEL: [f64; 3]= [0.0, 0.0, -1.0];
+const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
+const REF_REST_ACCEL: [f64; 3]= [0.0, 0.0, 1.0];
 
 pub struct OrientationUKF {
     //The state estimation
@@ -94,7 +94,7 @@ impl OrientationUKF {
 
     fn compute_mean_sensor_measurements(&self, sigma_points: Vec<Col<f64>>, w0: f64) -> Col<f64> {
         let nrows= self.state_covariance.nrows() as f64;
-        let mut mean_point= Col::<f64>::zeros(sigma_points[0].nrows());
+        let mut mean_point= w0*&sigma_points[0];
         //The scale factor determine how far from the mean point the sigma point is placed
         //  IF the spread factor is small, the sigma points will be close to the mean point(center point)
         let scale_factor= self.get_spread_factor().powf(2.0)*(nrows + kalman_filter::KAPPA) - nrows;
@@ -114,7 +114,7 @@ impl OrientationUKF {
     }
 
     pub fn estimate_true_state(&mut self, meas: KalmanMeasurements) -> Col<f64> {
-        self.logger.add_logs(format!("Init State= {:?} | Sensor Input= {:?} | Ref Sensor= {:?} | State Covariance= {:?}\n", self.current_state, meas.input_sensor_measurements, meas.ref_sensor_measurements, self.state_covariance));
+        self.logger.add_logs(format!("Init State= {:?} | Sensor Input= {:?} | Delta time= {} | Ref Sensor= {:?} | State Covariance= {:?}\n", self.current_state, meas.input_sensor_measurements, meas.delta_time, meas.ref_sensor_measurements, self.state_covariance));
         //println!("Init State= {:?} | Sensor Input= {:?} | Ref Sensor= {:?} | State Covariance= {:?}", self.current_state, meas.input_sensor_measurements, meas.ref_sensor_measurements, self.state_covariance);
         let (predicted_state, state_covariance)= self.predict(&self.current_state, &meas.input_sensor_measurements, meas.delta_time, &self.state_covariance);
         self.current_state= predicted_state.clone();
@@ -214,28 +214,50 @@ impl UnscentedKalmanFilter for OrientationUKF {
 
 
     fn apply_transition_function(state: &Col<f64>, input_measurements: &Col<f64>, delta_time: f64) -> Col<f64> {
-        //skew-symetric value that model the effect of the angular velocity from the gyro, to the orientation of the robot (in quaternion space)
-        let quat_rate_mat= mat![[0.0, -*input_measurements.get(0), -*input_measurements.get(1), -*input_measurements.get(2)],
-                                                        [*input_measurements.get(0), 0.0, *input_measurements.get(2), -*input_measurements.get(1)],
-                                                        [*input_measurements.get(1), -*input_measurements.get(2), 0.0, *input_measurements.get(0)],
-                                                        [*input_measurements.get(2), *input_measurements.get(1), -*input_measurements.get(0), 0.0]];
-        let new_state= state + (delta_time/2.0)*quat_rate_mat*state;
-        //delta/2 to compensate the rotation representation of the quaternion (rotations applied twice)
-        match Q64::new(*new_state.get(3), *new_state.get(0), *new_state.get(1), *new_state.get(2)).normalize() {
-            Some(quat) => {
-                let q= quat.as_quaternion();
-                return col![q.x, q.y, q.z, q.w];
-            },
-            None => return Col::<f64>::zeros(state.nrows()),
+        // 1. Extract components (State is [w, x, y, z])
+        let w = state[0];
+        let x = state[1];
+        let y = state[2];
+        let z = state[3];
+
+        // Gyro input (assumed Local Frame)
+        let gx = input_measurements[0];
+        let gy = input_measurements[1];
+        let gz = input_measurements[2];
+
+        // 2. Compute the derivatives (dq/dt)
+        let dw = 0.5 * (-x * gx - y * gy - z * gz);
+        let dx = 0.5 * ( w * gx + y * gz - z * gy);
+        let dy = 0.5 * ( w * gy - x * gz + z * gx);
+        let dz = 0.5 * ( w * gz + x * gy - y * gx);
+
+        // 3. Integrate (Euler Integration)
+        let mut w_new = w + dw * delta_time;
+        let mut x_new = x + dx * delta_time;
+        let mut y_new = y + dy * delta_time;
+        let mut z_new = z + dz * delta_time;
+
+        // 4. Normalize to prevent numerical drift
+        let magnitude = (w_new.powi(2) + x_new.powi(2) + y_new.powi(2) + z_new.powi(2)).sqrt();
+        
+        if magnitude > 1e-9 {
+            w_new /= magnitude;
+            x_new /= magnitude;
+            y_new /= magnitude;
+            z_new /= magnitude;
         }
+
+        col![w_new, x_new, y_new, z_new]
+
     }
 
     fn apply_ref_measurements_function(state: Col<f64>, measurements_vec_size: usize) -> Col<f64> {
-        match Q64::new(*state.get(3), *state.get(0), *state.get(1), *state.get(2)).normalize() {
+        match Q64::new(*state.get(0), *state.get(1), *state.get(2), *state.get(3)).normalize() {
             Some(quat_state) => {
                 let q= quat_state.as_quaternion();
                 let expected_accel_vec= quat_state.conj().rotate_vector(REF_REST_ACCEL);
-                let expected_magnetic_field= quat_state.conj().rotate_vector(REF_WORLD_MAGNETIC_FIELD);           
+                let norm= f64::sqrt(REF_WORLD_MAGNETIC_FIELD[0].powf(2.0) + REF_WORLD_MAGNETIC_FIELD[1].powf(2.0) + REF_WORLD_MAGNETIC_FIELD[2].powf(2.0));
+                let expected_magnetic_field= quat_state.conj().rotate_vector([REF_WORLD_MAGNETIC_FIELD[0] / norm, REF_WORLD_MAGNETIC_FIELD[1] / norm, REF_WORLD_MAGNETIC_FIELD[2] / norm]);           
                 return col![expected_accel_vec[0], expected_accel_vec[1], expected_accel_vec[2],
                             expected_magnetic_field[0], expected_magnetic_field[1], expected_magnetic_field[2]];
             },
@@ -404,7 +426,7 @@ impl UnscentedKalmanFilter for OrientationUKF {
             let predicted_quat = Q64::new(predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]);
             
             // Updated state = dq * q_pred (Post-multiply or pre-multiply depends on your frame convention)
-            let updated_quat = dq_norm * predicted_quat;
+            let updated_quat = predicted_quat*dq_norm;
             
             // Ensure it's normalized to prevent drift over time
             if let Some(final_quat) = updated_quat.normalize() {

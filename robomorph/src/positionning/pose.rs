@@ -7,8 +7,9 @@ use crate::{core::{messages::{DataChunk, Translatable}, utils}};
 pub const IMU_ACCEL: u16= 0x000a;
 pub const IMU_GYRO: u16= 0x000b;
 pub const IMU_MAGNETIC_FIELD: u16= 0x000c;
-pub const GNSS_LONGITUDE: u16= 0x000d;
-pub const GNSS_LATITUDE: u16= 0x000e;
+pub const IMU_ELAPSED_TIME: u16= 0x000d;
+pub const GNSS_LONGITUDE: u16= 0x000e;
+pub const GNSS_LATITUDE: u16= 0x000f;
 
 #[derive(Debug, Clone, Default)]
 pub struct GPSData {
@@ -66,11 +67,12 @@ pub struct IMUData {
     pub accel:  [f64; 3],
     pub gyro: [f64; 3],
     pub magnetic_field: [f64; 3],
+    pub elapsed_time: f64,
 }
 
 impl IMUData {
     pub fn new() -> Self {
-        return Self { accel: [0.0, 0.0, 0.0], gyro: [0.0, 0.0, 0.0], magnetic_field: [0.0, 0.0, 0.0]};
+        return Self { accel: [0.0, 0.0, 0.0], gyro: [0.0, 0.0, 0.0], magnetic_field: [0.0, 0.0, 0.0], elapsed_time: 0.0};
     }
 }
 
@@ -84,7 +86,7 @@ impl Translatable for IMUData {
             buffer.push(bytes[i]);
             if id == IMU_ACCEL {
                 for j in 0..3 {
-                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len() && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.accel[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
@@ -93,7 +95,7 @@ impl Translatable for IMUData {
                 buffer.clear();
             } else if id == IMU_GYRO {
                 for j in 0..3 {
-                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len() && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.gyro[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
@@ -102,13 +104,18 @@ impl Translatable for IMUData {
                 buffer.clear();
             } else if id == IMU_MAGNETIC_FIELD {
                 for j in 0..3 {
-                    if i+4 <= bytes.len()-1 && let Ok(arr) = bytes[i..i+4].try_into() {
+                    if i+4 <= bytes.len() && let Ok(arr) = bytes[i..i+4].try_into() {
                         self.magnetic_field[j]= f32::from_be_bytes(arr) as f64;
                         i+= 4;
                     }
                 }
                 id = 0;
                 buffer.clear();
+            } else if id == IMU_ELAPSED_TIME {
+                if i+4 <= bytes.len() && let Ok(arr) = bytes[i..i+4].try_into() {
+                    self.elapsed_time= f32::from_be_bytes(arr) as f64;
+                    i+= 4;
+                }
             } else {
                 if utils::contain_bytes(buffer.clone(), IMU_ACCEL.to_be_bytes().to_vec()) >= 0{
                     id= IMU_ACCEL;
@@ -120,6 +127,10 @@ impl Translatable for IMUData {
                 }
                 if utils::contain_bytes(buffer.clone(), IMU_MAGNETIC_FIELD.to_be_bytes().to_vec()) >= 0{
                     id= IMU_MAGNETIC_FIELD;
+                    buffer.clear();
+                }
+                if utils::contain_bytes(buffer.clone(), IMU_ELAPSED_TIME.to_be_bytes().to_vec()) >= 0{
+                    id= IMU_ELAPSED_TIME;
                     buffer.clear();
                 }
                 i+= 1;
@@ -142,6 +153,8 @@ impl Translatable for IMUData {
         for i in 0..3 {
             frame.append(&mut f32::to_be_bytes(self.magnetic_field[i] as f32).to_vec());
         }
+        frame.append(&mut IMU_ELAPSED_TIME.to_be_bytes().to_vec());
+        frame.append(&mut f32::to_be_bytes(self.elapsed_time as f32).to_vec());
         return frame;
     }
 }
