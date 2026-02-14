@@ -1,18 +1,15 @@
-use std::env::consts::ARCH;
-
-use ndarray::Array1;
 use num_quaternion::{Q32, Quaternion, UnitQuaternion};
 
 use crate::{control::pid::PIDController, core::utils, positionning::pose::IMUData};
 
 pub struct MahonyFilter {
     controllers: [PIDController; 3],
-    delta_time: f32,
-    quaternion_orientation: UnitQuaternion<f32>,
+    delta_time: f64,
+    quaternion_orientation: UnitQuaternion<f64>,
 }
 
 impl MahonyFilter {
-    pub fn new(p: f32, i:f32, d: f32, max_integral_error: f32, delta_time: f32, min_threshold_error: f32, leak_factor: f32) -> Self {
+    pub fn new(p: f64, i:f64, d: f64, max_integral_error: f64, delta_time: f64, min_threshold_error: f64, leak_factor: f64) -> Self {
         let init_orientation= UnitQuaternion::from_euler_angles(0.0, 0.0, 0.0);
         return Self { controllers: [PIDController::new(p, i, d, max_integral_error, min_threshold_error, leak_factor), 
                                         PIDController::new(p, i, d, max_integral_error, min_threshold_error, leak_factor), 
@@ -20,7 +17,7 @@ impl MahonyFilter {
                         delta_time: delta_time, quaternion_orientation: init_orientation};
     }
 
-    pub fn estimate_orientation(&mut self, imu_data: IMUData) -> [f32; 3] {
+    pub fn estimate_orientation(&mut self, imu_data: IMUData) -> [f64; 3] {
         /*
          * ==> Computing ROLL & PITCH error <==
          * Error is between
@@ -28,16 +25,19 @@ impl MahonyFilter {
          */
         //Normalize Accelerometer: We only care about the direction of gravity, 
         //not the magnitude of the force (G-force).
-        let mut accel_measurement= Array1::from_vec(imu_data.accel.to_vec());
-        accel_measurement /= f32::sqrt(accel_measurement[0].powf(2.0) + accel_measurement[1].powf(2.0) + accel_measurement[2].powf(2.0));
+        let mut accel_measurement= imu_data.accel.to_vec();
+        let norm= f64::sqrt(accel_measurement[0].powf(2.0) + accel_measurement[1].powf(2.0) + accel_measurement[2].powf(2.0));
+        for i in 0..accel_measurement.len() {
+            accel_measurement[i] /= norm;
+        }
         //Estimate the gravity vector at the current orientation 
         //  What the gravity vector should be at the current orientation
         let q= self.quaternion_orientation.clone().into_quaternion();
-        let expected_gravity_vec= Array1::from_vec(vec![
+        let expected_gravity_vec= vec![
                                             2.0*(q.x*q.z - q.w*q.y),
                                             2.0*(q.w*q.x + q.y*q.z),
                                             q.w.powf(2.0) - q.x.powf(2.0) - q.y.powf(2.0) + q.z.powf(2.0)
-                                        ]);
+                                        ];
         //Computing the cross product between the measured gravity vector and the expected(theoric) gravity vector
         //  To get the error between them
         let  error_accel = utils::compute_cross_product(accel_measurement, expected_gravity_vec);
@@ -47,8 +47,11 @@ impl MahonyFilter {
          * Error is between
          * the robot orientation at T-1 nd the current Magnetometer measurement at T
          */
-        let mut magnetic_field= Array1::from_vec(imu_data.magnetic_field.to_vec());
-        magnetic_field /= f32::sqrt(magnetic_field[0].powf(2.0) + magnetic_field[1].powf(2.0) + magnetic_field[2].powf(2.0));
+        let mut magnetic_field= imu_data.magnetic_field.to_vec();
+        let norm= f64::sqrt(magnetic_field[0].powf(2.0) + magnetic_field[1].powf(2.0) + magnetic_field[2].powf(2.0));
+        for i in 0..magnetic_field.len() {
+            magnetic_field[i] /= norm;
+        }
         /* 
          * Pass the magnetic field in body frame (from the Magnetometer measurements)
          * To the world frame
@@ -75,19 +78,25 @@ impl MahonyFilter {
          *  knowing that the magnetic field is express as [1, 0, 0] so we need the X axis 
          *  and the Magnometer help to estimate the heading (angle around the Z axis), so we need the Z axis
          */
-        let mag_ref_world = Array1::from_vec(vec![bx, 0.0, bz]);
+        let mag_ref_world = vec![bx, 0.0, bz];
         // then rotate back into body frame
         // it give the local North without taking to account the pitch angle of the robot (that give a wrong North)
-        let mut expected_local_field = Array1::from_vec(self.quaternion_orientation.conj().rotate_vector([
+        let mut expected_local_field = self.quaternion_orientation.conj().rotate_vector([
             mag_ref_world[0],
             mag_ref_world[1],
             mag_ref_world[2],
-        ]).to_vec());
-        expected_local_field /= f32::sqrt(expected_local_field[0].powf(2.0) + expected_local_field[1].powf(2.0) + expected_local_field[2].powf(2.0));
+        ]).to_vec();
+        let norm= f64::sqrt(expected_local_field[0].powf(2.0) + expected_local_field[1].powf(2.0) + expected_local_field[2].powf(2.0));
+        for i in 0..expected_local_field.len() {
+            expected_local_field[i] /= norm;
+        }
         //Computing the cross product between the measured magnetic field vector and the True local North (without pitch angle error)
         //  To get the error between them
         let error_magnetic= utils::compute_cross_product(magnetic_field.clone(), expected_local_field);
-        let error= error_accel + error_magnetic;
+        let mut error= Vec::new();
+        for i in 0..3 {
+            error.push(error_accel[i] + error_magnetic[i]);
+        }
 
         /*
          * Computing the angular velocity of the robot

@@ -9,14 +9,14 @@ pub const LIDAR_ANGLES_CONFIG: u16= 0x000a;
 pub const LIDAR_MEASUREMENT: u16= 0x000b;
 pub const LIDAR_OBSTACLES: u16=0x000c;
 //Min distance between 2 obstales
-pub const OBSTACLE_THRESHOLD: f32= 1.0;
-pub const POINT_THRESHOLD: f32= 0.05;
+pub const OBSTACLE_THRESHOLD: f64= 1.0;
+pub const POINT_THRESHOLD: f64= 0.05;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LidarPoint {
-    angle: f32,
-    distance: f32,
-    location: [f32; 2],
+    angle: f64,
+    distance: f64,
+    location: [f64; 2],
     cluster_id: u32,
 }
 
@@ -24,24 +24,24 @@ pub struct LidarPoint {
 
 impl LidarPoint{
     //Classic constructor, in body frame (localisation of the point from the lidar sensor)
-    pub fn new(angle: f32, distance: f32) -> Self {
+    pub fn new(angle: f64, distance: f64) -> Self {
         let x= distance * angle.cos();
         let y= distance * angle.sin();
         return Self { angle, distance, location: [x, y], cluster_id: 0 };
     }
 
     //Constructor in World Frame. Localisation from the robot Pose in World Frame
-    pub fn new_from_pose(angle: f32, distance: f32, origin_pose: Pose) -> Self {
+    pub fn new_from_pose(angle: f64, distance: f64, origin_pose: Pose) -> Self {
         let origin_location= origin_pose.get_location();
-        let orientation= origin_pose.get_orientation();
-        let location= [origin_location[0] + distance*f32::cos(angle + orientation[2]), 
-                                    origin_location[1] + distance*f32::sin(angle + orientation[2])];
+        let orientation= origin_pose.get_euler_orientation();
+        let location= [origin_location[0] + distance*f64::cos(angle + orientation[2]), 
+                                    origin_location[1] + distance*f64::sin(angle + orientation[2])];
         return Self { angle, distance, location, cluster_id: 0 };
     }
 
-    pub fn new_from_location(location: [f32; 2], pose: Pose) -> Self {
+    pub fn new_from_location(location: [f64; 2], pose: Pose) -> Self {
         let origin= pose.get_location();
-        let angle= f32::atan2(location[1] - origin[1], location[0] - origin[0]);
+        let angle= f64::atan2(location[1] - origin[1], location[0] - origin[0]);
         let distance= euclidean_distance(vec![origin[0], origin[1]], location.to_vec());
         return Self { angle, distance, location, cluster_id: 0};
     }
@@ -53,33 +53,33 @@ impl LidarPoint{
     pub fn get_id(&self) -> u32 {
         return self.cluster_id;
     }
-    pub fn get_location(&self) -> [f32; 2] {
+    pub fn get_location(&self) -> [f64; 2] {
         return self.location;
     }
-    pub fn get_angle(&self) -> f32 {
+    pub fn get_angle(&self) -> f64 {
         return self.angle;
     }
-    pub fn get_distance(&self) -> f32 {
+    pub fn get_distance(&self) -> f64 {
         return self.distance;
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct LidarObject {
-    x_min: f32,
-    y_min: f32,
-    x_max: f32,
-    y_max: f32,
+    x_min: f64,
+    y_min: f64,
+    x_max: f64,
+    y_max: f64,
     //shape: [LidarPoint; 4],
     cluster_id: u32,
     
 }
 impl LidarObject {
     pub fn new(cluster_id: u32, inner_pts: Vec<LidarPoint>, pose: Pose) -> Self {
-        let mut x_min= f32::INFINITY;
-        let mut x_max= -f32::INFINITY;
-        let mut y_min= f32::INFINITY;
-        let mut y_max= -f32::INFINITY;
+        let mut x_min= f64::INFINITY;
+        let mut x_max= -f64::INFINITY;
+        let mut y_min= f64::INFINITY;
+        let mut y_max= -f64::INFINITY;
         for pt in inner_pts.clone() {
             if pt.location[0] < x_min {
                 x_min= pt.location[0]
@@ -106,31 +106,31 @@ impl LidarObject {
         return self.cluster_id;
     }
 
-    pub fn get_bounds(&self) -> [f32; 4] {
+    pub fn get_bounds(&self) -> [f64; 4] {
         return [self.x_min, self.y_min, self.x_max, self.y_max];
     }
 
     pub fn mix_objects(obj1: LidarObject, obj2: LidarObject) -> Option<Self> {
         if LidarObject::is_intersecting(obj1.clone(), obj2.clone()) || LidarObject::is_contained(obj1.clone(), obj2.clone()){
-            return Some(LidarObject { x_min: f32::min(obj1.x_min, obj2.x_min), y_min: f32::min(obj1.y_min, obj2.y_min), 
-                            x_max: f32::max(obj1.x_max, obj2.x_max), y_max: f32::max(obj1.y_max, obj2.y_max), 
+            return Some(LidarObject { x_min: f64::min(obj1.x_min, obj2.x_min), y_min: f64::min(obj1.y_min, obj2.y_min), 
+                            x_max: f64::max(obj1.x_max, obj2.x_max), y_max: f64::max(obj1.y_max, obj2.y_max), 
                             cluster_id: u32::min(obj1.cluster_id, obj2.cluster_id) });
         } else {
             return None; 
         }
     }
 
-    pub fn compute_area(obj: LidarObject) -> f32 {
+    pub fn compute_area(obj: LidarObject) -> f64 {
         return (obj.x_max - obj.x_min) * (obj.y_max - obj.y_min);
     }
 
     pub fn is_intersecting(obj1: LidarObject, obj2: LidarObject) -> bool {
-        let x_min= f32::max(obj1.x_min, obj2.x_min);
-        let x_max= f32::min(obj1.x_max, obj2.x_max);
-        let y_min= f32::max(obj1.y_min, obj2.y_min);
-        let y_max= f32::min(obj1.y_max, obj2.y_max);
-        let x_area= f32::max(0.0, x_max-x_min);
-        let y_area= f32::max(0.0, y_max-y_min);
+        let x_min= f64::max(obj1.x_min, obj2.x_min);
+        let x_max= f64::min(obj1.x_max, obj2.x_max);
+        let y_min= f64::max(obj1.y_min, obj2.y_min);
+        let y_max= f64::min(obj1.y_max, obj2.y_max);
+        let x_area= f64::max(0.0, x_max-x_min);
+        let y_area= f64::max(0.0, y_max-y_min);
         //println!("X AREA= {}    Y AREA= {} => AREA= {}", x_area, y_area, x_area*y_area);
         return x_area * y_area > 0.0;
     }
@@ -163,7 +163,7 @@ impl LidarMeasurements {
         return Self { lidar_pts: Vec::new(), angle_in_deg, lidar_objects: Vec::new() };
     }
 
-    pub fn new_from_measurements(angle: Vec<f32>, distance: Vec<f32>, angle_in_deg: bool) -> Self {
+    pub fn new_from_measurements(angle: Vec<f64>, distance: Vec<f64>, angle_in_deg: bool) -> Self {
         let mut measurements= Vec::new();
         for i in 0..angle.len() {
             measurements.push(LidarPoint::new(angle[i], distance[i]));
@@ -171,7 +171,7 @@ impl LidarMeasurements {
         return Self { lidar_pts: measurements, angle_in_deg, lidar_objects: Vec::new() };
     }
 
-    pub fn insert(&mut self, angle: f32, distance: f32) {
+    pub fn insert(&mut self, angle: f64, distance: f64) {
         self.lidar_pts.push(LidarPoint::new(angle, distance));
     }
 
@@ -205,12 +205,12 @@ impl LidarMeasurements {
         return None;
     }
 
-    pub fn get_closest_measurement(&self, angle: f32) -> Option<LidarPoint> {
+    pub fn get_closest_measurement(&self, angle: f64) -> Option<LidarPoint> {
         if self.lidar_pts.len() == 0 {
             return None;
         }
         let mut closest_index= 0;
-        let mut closest_diff= f32::MAX;
+        let mut closest_diff= f64::MAX;
         for i in 0..self.lidar_pts.len() {
             let diff= (self.lidar_pts[i].angle - angle).abs();
             if diff < closest_diff {
@@ -244,10 +244,10 @@ impl Translatable for LidarMeasurements {
             buffer.push(bytes[i]);
             if id == LIDAR_ANGLES_CONFIG {
                 if let Ok(arr) = bytes[i..i+4].try_into() {
-                    current_angle= f32::from_be_bytes(arr);
+                    current_angle= f32::from_be_bytes(arr) as f64;
                     i+=4;
                     if let Ok(arr) = bytes[i..i+4].try_into() {
-                        angle_step= f32::from_be_bytes(arr);
+                        angle_step= f32::from_be_bytes(arr) as f64;
                         current_angle -= angle_step;
                     }
                     i+=4;
@@ -264,7 +264,7 @@ impl Translatable for LidarMeasurements {
                 } else {
                     if let Ok(arr) = bytes[i..i+4].try_into() {
                         current_angle += angle_step;
-                        self.insert(current_angle, f32::from_be_bytes(arr));
+                        self.insert(current_angle, f32::from_be_bytes(arr) as f64);
                         j+=1;
                         i+=4;
                         remain_bytes-=1;
@@ -323,26 +323,26 @@ impl Translatable for LidarMeasurements {
         let angle_step= self.lidar_pts[1].angle - self.lidar_pts[0].angle;
         //let last_angle = utils::modulo_2pi(angles[angles.len()-1].into_inner());
         if self.angle_in_deg {
-            frame.append(&mut f32::to_be_bytes(self.lidar_pts[0].angle.to_radians()).to_vec());
-            frame.append(&mut f32::to_be_bytes(angle_step.to_radians()).to_vec());
+            frame.append(&mut f32::to_be_bytes(self.lidar_pts[0].angle.to_radians() as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(angle_step.to_radians() as f32).to_vec());
             frame.append(&mut LIDAR_MEASUREMENT.to_be_bytes().to_vec());
         }
         else {
-            frame.append(&mut f32::to_be_bytes(self.lidar_pts[0].angle).to_vec());
-            frame.append(&mut f32::to_be_bytes(angle_step).to_vec());
+            frame.append(&mut f32::to_be_bytes(self.lidar_pts[0].angle as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(angle_step as f32).to_vec());
             frame.append(&mut LIDAR_MEASUREMENT.to_be_bytes().to_vec());
         }
         frame.append(&mut u16::to_be_bytes(self.lidar_pts.len() as u16).to_vec());
         for i in 0..self.lidar_pts.len() {
-            frame.append(&mut f32::to_be_bytes(self.lidar_pts[i].distance).to_vec());
+            frame.append(&mut f32::to_be_bytes(self.lidar_pts[i].distance as f32).to_vec());
         }
         frame.append(&mut LIDAR_OBSTACLES.to_be_bytes().to_vec());
         frame.append(&mut u16::to_be_bytes((self.lidar_objects.clone().len()*16) as u16).to_vec());
         for obj in self.lidar_objects.clone() {
-            frame.append(&mut f32::to_be_bytes(obj.x_min).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.y_min).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.x_max).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.y_max).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_min as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_min as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_max as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_max as f32).to_vec());
         }
         //let frame_size= u16::to_be_bytes(frame.len() as u16);
         //frame[2]= frame_size[0];
@@ -416,10 +416,10 @@ impl Translatable for LidarMap {
         frame.append(&mut LIDAR_OBSTACLES.to_be_bytes().to_vec());
         frame.append(&mut ((self.lidar_objects.len()*16) as u16).to_be_bytes().to_vec());
         for obj in self.lidar_objects.clone() {
-            frame.append(&mut f32::to_be_bytes(obj.x_min).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.y_min).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.x_max).to_vec());
-            frame.append(&mut f32::to_be_bytes(obj.y_max).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_min as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_min as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.x_max as f32).to_vec());
+            frame.append(&mut f32::to_be_bytes(obj.y_max as f32).to_vec());
         }
         return frame;
     }

@@ -1,37 +1,54 @@
+mod filtering;
+
 use std::{sync::{Arc, Mutex}, thread};
-use ndarray::Array2;
-use robomorph::{communication::UDPChannel, core::{event_management::{Event, Observer}, messages, worker::{Module, WorkerFactory}}, filtering::mahony_filter::MahonyFilter, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::{LidarMap, LidarMeasurements}, segmentation_algorithms::ClassicSolver}, positionning::pose::{IMUData, Pose}};
+use faer::{Col, Mat, col, mat};
+use num_quaternion::{Q64, Quaternion, UQ64};
+use robomorph::{communication::UDPChannel, core::{event_management::{Event, Observer}, file_logger::FileLogger, messages, worker::{Module, WorkerFactory}}, filtering::{kalman_filter::{KalmanMeasurements, UnscentedKalmanFilter}, mahony_filter::MahonyFilter}, lidar_management::{lidar_perception_manager::LidarPerceptionManager, measurements::{LidarMap, LidarMeasurements}, segmentation_algorithms::ClassicSolver}, positionning::pose::{GPSData, IMUData, Pose}};
 
+use crate::filtering::imu_ukf::OrientationUKF;
 
-
-pub struct BenchmarkFiltering {
+pub struct FiltersManager {
     imu_data_observer: Mutex<Option<Observer<IMUData>>>,
     data_filtered_event: Mutex<Event<Pose>>,
     filter: Mutex<MahonyFilter>,
+    ukf_imu: Mutex<OrientationUKF>,
 }
 
-impl Module for BenchmarkFiltering {
+impl Module for FiltersManager {
     fn exec_main_task(&self) {
         
     }
 }
 
-impl BenchmarkFiltering {
-    pub fn new(p: f32, i: f32, d: f32, max_integral_error: f32, dt: f32 ) -> Arc<Self> {
-        let filter= MahonyFilter::new(p, i, d, max_integral_error, dt, 0.5f32.to_radians(), 1.0);
-        let this = Arc::new(Self { imu_data_observer: Mutex::new(None), data_filtered_event: Mutex::new(Event::new_empty()), filter: Mutex::new(filter) });
+impl FiltersManager {
+    pub fn new(p: f64, i: f64, d: f64, max_integral_error: f64, dt: f64, ukf: OrientationUKF) -> Arc<Self> {
+        let filter= MahonyFilter::new(p, i, d, max_integral_error, dt, 0.5f64.to_radians(), 1.0);
+        let this = Arc::new(Self { imu_data_observer: Mutex::new(None), data_filtered_event: Mutex::new(Event::new_empty()),
+                                                                    filter: Mutex::new(filter), ukf_imu: Mutex::new(ukf) });
         let mut filter_manager= this.clone();
         let obs= Observer::new(Arc::new(Mutex::new(move |imu_data: IMUData| {
-            if let Ok(mut filter)= filter_manager.clone().filter.try_lock() {
-                let estimated_orientation= filter.estimate_orientation(imu_data);
-                //let test= filter.compute_system_state(input_array, measurement_array);
-                if let Ok(data_event)= filter_manager.clone().data_filtered_event.try_lock() {
-                    let pose= Pose::new([0.0, 0.0, 0.0], 
-                                                        [estimated_orientation[0], estimated_orientation[1], estimated_orientation[2]], 
+            if let Ok(mut ukf)= filter_manager.ukf_imu.try_lock() {
+                let state= ukf.estimate_true_state(KalmanMeasurements{input_sensor_measurements: col![imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]], 
+                                                                                            ref_sensor_measurements: col![imu_data.accel[0], imu_data.accel[1], imu_data.accel[2], 
+                                                                                                                            imu_data.magnetic_field[0], imu_data.magnetic_field[1], imu_data.magnetic_field[2]],delta_time: imu_data.elapsed_time});
+                let quat_state= Q64::new(state[0], state[1], state[2], state[3]);
+                if let Some(unit_quat)= quat_state.normalize() && let Ok(data_event)= filter_manager.clone().data_filtered_event.try_lock() {
+                    let pose= Pose::new(GPSData{latitude: 0.0, longitude: 0.0}, [0.0, 0.0, 0.0], 
+                                                        unit_quat, 
                                                         [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
                     data_event.trig(pose);
                 }
             }
+            /*if let Ok(mut filter)= filter_manager.clone().filter.try_lock() {
+                let estimated_orientation= filter.estimate_orientation(imu_data);
+                //let test= filter.compute_system_state(input_array, measurement_array);
+                if let Ok(data_event)= filter_manager.clone().data_filtered_event.try_lock() {
+                    let pose= Pose::new(GPSData{latitude: 0.0, longitude: 0.0}, [0.0, 0.0, 0.0], 
+                                                        UQ64::from_euler_angles(estimated_orientation[0], estimated_orientation[1], estimated_orientation[2]), 
+                                                        [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+                    data_event.trig(pose);
+                }
+            }*/
         })));
         filter_manager= this.clone();
         if let Ok(mut obs_guard) = filter_manager.clone().imu_data_observer.try_lock() {
@@ -193,7 +210,45 @@ fn main() {
     let mut factory= WorkerFactory::new();
     let mailbox= MailBox::new(true);
     let udp= UDPChannel::new_async("127.0.0.1", 8090, "127.0.0.1", 9000);
-    let pose_filter= BenchmarkFiltering::new(20.0, 0.01, 3.25, 10.0, 1.0/60.0);
+    //Function used in UKF to estimate the theoric state of the system for a given sensor input measurements vector, and elapsed time
+    //  In this case, state is the robot orientation in Quaternion space, the sensor_inputs is the gyro measurements
+    /*let transition_function= Box::new(|state: &Col<f64>, sensor_inputs: &Col<f64>, delta_time: f64| {
+        
+    });*/
+    //Function used in the UKF to compute the expected ref sensor measurements for a given state
+    //  In this case, the state is a robot orientation in Quaternion space
+    //  The ref sensors measurements we will compute are the measurements of an accelerometer and magnetometer 
+    /*let ref_sensor_function= Box::new(|state: &Col<f64>, vec_size| {
+        
+
+    });*/
+
+    let state_covariance= Mat::<f64>::identity(3, 3)*0.05;
+    //Q matrix => Noise of the state that comes with the sensor input measurements (gyrometer)
+    let sate_process_noise= Mat::<f64>::identity(3, 3)*0.05;
+
+    //R matrix => Noise of the ref sensors (Accelerometer and Magnetometer)
+    let mut bind = Mat::<f64>::identity(6, 6);
+    let mut measurement_noise= bind.as_mut();
+    let diag= [
+                            0.05, 0.05, 0.05,   //Accelerometer measurements noise 
+                            0.1, 0.1, 0.1       //Magnetometer measurements noise
+                        ];
+    for i in 0..diag.len() {
+        measurement_noise[(i, i)]= diag[i];
+    }
+    
+    // Box<dyn FnMut(&Col<f64>, &Col<f64>, f64) -> Col<f64> + Send + Sync + 'static>,
+    //The sensor measurement estimation
+    //  The goal of this function is to model the theoric ref sensor measurement for a given state
+    //  (state, time) -> expected ref sensor measurements
+    //ref_sensor_function: Box<dyn FnMut(&Col<f64>, f64) -> Col<f64> + Send + Sync + 'static>,
+    //UKF for orientation estimation
+    let binding = UQ64::from_euler_angles(0.0, 0.0, 0.0);
+    let init_quat= binding.as_quaternion();
+    let ukf_imu= OrientationUKF::new(col![init_quat.w, init_quat.x, init_quat.y, init_quat.z], state_covariance,
+                                                                    measurement_noise.cloned(), sate_process_noise, 0.1, 2.0);
+    let pose_filter= FiltersManager::new(20.0, 0.01, 3.25, 10.0, 1.0/60.0, ukf_imu);
     let classic_solver= Arc::new(ClassicSolver::new( 0.10, 2,
         Box::new(|p1, p2|{
             let loc1= p1.get_location();
@@ -213,7 +268,7 @@ fn main() {
             //udp.add_data_observer(*observer);
         }
     }
-    //  Send the IMU measurements(from godot frame), from the Mailbox to BenchmarkFiltering
+    //  Send the IMU measurements(from godot frame), from the Mailbox to FiltersManager
     if let Ok(mut lidar_event) = mailbox.clone().pose_filtering_event.try_lock() {
         if let Some(obs)= pose_filter.clone().get_imu_measurements_observer() {
             lidar_event.plug_observer(obs);
@@ -233,7 +288,7 @@ fn main() {
             proc_lidar_meas_event.plug_observer(obs);
         }
     }
-    //  Send the filtered Pose from BenchmarkFiltering to the Mailbox
+    //  Send the filtered Pose from FiltersManager to the Mailbox
     if let Ok(mut pose_estimation_event)= pose_filter.data_filtered_event.try_lock() {
         if let Some(obs) = mailbox.get_pose_filtered_observer() {
             pose_estimation_event.plug_observer(obs);

@@ -2,8 +2,11 @@ use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, System
 
 use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
+use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData}};
 
+const ORIGIN_GPS_DATA: GPSData= GPSData{longitude: 5.7932940640423904, latitude: 43.25157380084422};
+const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
+const GRAVITY: Vector3= Vector3{x: 0.0, y: -9.81, z: 0.0};
 
 #[derive(GodotClass)]
 #[class(init, base=Node3D)]
@@ -20,7 +23,9 @@ pub struct AutonomyNode {
     last_linear_vel: Vector3,
     world_magnetic_field: Vector3,
     data_fps: u32,
-    dt: f64
+    gps_frequency: u32,
+    dt: f64,
+    gps_dt: f64
 }
 #[godot_api]
 /**
@@ -31,7 +36,8 @@ impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
         //let test= vec![]
-        self.world_magnetic_field= Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+        self.world_magnetic_field= Vector3 { x: REF_WORLD_MAGNETIC_FIELD[0] as f32, y: REF_WORLD_MAGNETIC_FIELD[2] as f32, z: REF_WORLD_MAGNETIC_FIELD[1] as f32 };
+        self.world_magnetic_field= self.world_magnetic_field.normalized();
         let udp= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090);
         let udp_debug= UDPChannel::new_async("127.0.0.1", 9010, "127.0.0.1", 9000);
         //Get and store the metadata of the 
@@ -115,6 +121,21 @@ impl INode3D for AutonomyNode{
             godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
             self.data_fps= 10;
         }
+        if self.base().has_meta("gpsFrequency") {
+            match self.base().get_meta("gpsFrequency").try_to::<u32>() {
+                Ok(data_frequency) => {
+                    self.gps_frequency= data_frequency;
+                    godot_print!("Loading gpsFrequency metadata succesful, It's value is= {}", data_frequency);
+                },
+                Err(_) => {
+                    godot_print!("/!\\ ERROR: gpsFrequency conversion in f32 failed.\nYou should change the metadata type in u32");
+                    self.gps_frequency= 1;
+                },
+            } 
+        } else {
+            godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
+            self.data_fps= 10;
+        }
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
 
@@ -129,6 +150,12 @@ impl INode3D for AutonomyNode{
                 if button_event.get_button_index() == JoyButton::A {
                     self.motion_command= [0.0, 0.0];
                 }
+                if button_event.get_button_index() == JoyButton::X {
+                    self.motion_command= [0.0, 1.0];
+                }
+                if button_event.get_button_index() == JoyButton::B {
+                    self.motion_command= [0.0, -1.0];
+                }
                 //godot_print!("Joypad button detected: {:?}\n", button_event.get_button_index());
             },
             Err(_) => {
@@ -140,16 +167,16 @@ impl INode3D for AutonomyNode{
                 let value= joypad_event.get_axis_value();
                 if value.abs() > 0.2 {
                     if joypad_event.get_axis() == JoyAxis::LEFT_X {
-                        self.motion_command[1]= -value;
+                        self.motion_command[1]= -1.0;
                     } 
                     if joypad_event.get_axis() == JoyAxis::LEFT_Y {
-                        self.motion_command[0]= -value;
+                        self.motion_command[0]= -1.0;
                     }
                     if joypad_event.get_axis() == JoyAxis::RIGHT_X {
-                        self.motion_command[1]= value;   
+                        self.motion_command[1]= 1.0;   
                     }
                     if joypad_event.get_axis() == JoyAxis::RIGHT_Y {
-                        self.motion_command[0]= value;
+                        self.motion_command[0]= 1.0;
                     }
 
                 } else {
@@ -163,12 +190,13 @@ impl INode3D for AutonomyNode{
         }
     }
 
-    fn process(&mut self, delta: f64) {
+    fn physics_process(&mut self, delta: f64) {
         //godot_print!("Motion command: {:?}\n", self.motion_command);
         //godot_print!("{}\n", delta);
         //Detect the collision point between the raycast and the rigidBodies in the scene
         //let mut imu_measurements= IMUData
         self.dt += delta;
+        self.gps_dt += delta;
         let mut measurements= LidarMeasurements::new(true);
         let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
@@ -183,7 +211,8 @@ impl INode3D for AutonomyNode{
                     true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
-                    let godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
+                    let mut godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - GRAVITY;
+                    godot_linear_accel /= GRAVITY.y.abs();
                     self.last_linear_vel = robot.get_linear_velocity();
 
                     // 2. Get Rotation and Angular Velocity
@@ -192,32 +221,35 @@ impl INode3D for AutonomyNode{
 
                     // 3. Bring World Vectors into the Robot's Local Body Frame
                     // Godot's '*' operator for Quaternions/Vectors handles the rotation.
-                    let local_accel = robot_q.inverse() * godot_linear_accel;
+                    let mut local_accel = robot_q.inverse() * godot_linear_accel;
                     let local_mag   = robot_q.inverse() * self.world_magnetic_field;
                     let local_gyro  = robot_q.inverse() * godot_angular_vel; // If angular_vel is in world coords
-
+                    local_accel= local_accel.normalized();
                     // 4. Map Godot (Y-Up) to IMU (Z-Up) Convention
                     // Godot X -> IMU X (Forward)
                     // Godot Y -> IMU Z (Up)
                     // Godot -Z -> IMU Y (Left) - This maintains a Right-Handed System
+                    //local_accel= local_accel.normalized();
                     imu_data = IMUData {
                         accel: [
-                            local_accel.x, 
-                            -local_accel.z, 
-                            local_accel.y
+                            local_accel.x as f64, 
+                            -local_accel.z as f64, 
+                            local_accel.y as f64
                         ], 
                         gyro: [
-                            local_gyro.x, 
-                            -local_gyro.z, 
-                            local_gyro.y
+                            local_gyro.x as f64, 
+                            -local_gyro.z as f64, 
+                            local_gyro.y as f64
                         ],
                         magnetic_field: [
-                            local_mag.x, 
-                            -local_mag.z, 
-                            local_mag.y
-                        ]
+                            local_mag.x as f64, 
+                            -local_mag.z as f64, 
+                            local_mag.y as f64
+                        ],
+                        elapsed_time: self.dt
                     };
-                    //godot_print!("IMU Data:\n{:?}", imu_data);
+                    godot_print!("Linear Accel:\n{:?}", godot_linear_accel);
+                    godot_print!("IMU Data:\n{:?}", imu_data);
                     //Compute the velocities to apply to the robot from the joystick input
                     //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
                     let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };
@@ -256,7 +288,7 @@ impl INode3D for AutonomyNode{
                                                     if distance < 0.0 {
                                                         godot_print!("Error: Negative distance detected");
                                                     }
-                                                    measurements.insert(angle.to_degrees() as f32, distance);
+                                                    measurements.insert(angle.to_degrees(), distance as f64);
                                                     //measurements.push(origin.distance_to(pos));
                                                 },
                                                 Err(_) => {
@@ -277,36 +309,50 @@ impl INode3D for AutonomyNode{
                     //IF the UDP module exist
                     if let Some(udp_worker)= &self.udp_worker && let Some(debug_udp) = &self.debug_worker {
                         if measurements.len() > 0 {
-                            //godot_print!("Elapsed Time= {}", self.dt);
                             if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
+                                if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
+                                    godot_print!("Send Late\n")
+                                }
                                 //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
-                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let gps_data= utils::local_to_global_frame(ORIGIN_GPS_DATA, robot.get_global_position().x as f64, robot.get_global_position().y as f64);
+                                        if self.gps_dt >= 1.0 / self.gps_frequency as f64 {
+                                            let mut gps_frame= messages::convert_to_frame(vec![Box::new(gps_data)]);
+                                            udp.publish_message(gps_frame);
+                                            self.gps_dt= 0.0;
+                                        }
+                                        let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        //debug_udp= rob_orientation.to_string();
+                                        match debug_udp.get_module().downcast_ref::<UDPChannel>() {
+                                            Some(udp_debug)=>{udp_debug.publish_message(Vec::from(rob_orientation.to_string()));}
+                                            None => todo!(),
+                                        }
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
-                                        udp.publish_message(frame_imu.clone());
-                                        let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
-                                        udp.publish_message(frame.clone());
+                                        udp.publish_message(imu_frame.clone());
+                                        /*let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
+                                        udp.publish_message(frame.clone());*/
                                     },
                                     None => {
 
                                     },
                                 }
                                 udp_worker.force_run();
+                                debug_udp.force_run();
                             }
                             /*if udp_worker.try_run() {
                                 godot_print!("Elapsed Time= {}", self.dt);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
-                                        let mut frame_imu=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
                                         //godot_print!("Send IMU");
                                         //godot_print!(" => {:?}\n", frame);
                                         //godot_print!("= {:?}\n", frame);
-                                        udp.publish_message(frame_imu.clone());
+                                        udp.publish_message(imu_frame.clone());
                                         let frame= messages::convert_to_frame(vec![Box::new(measurements)]);
                                         udp.publish_message(frame.clone());
                                     },

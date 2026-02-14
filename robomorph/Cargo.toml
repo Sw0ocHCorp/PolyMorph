@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 ordered-float = "5.1.0"
 downcast-rs = "2.0.1"
-ndarray = "0.17.1"
+faer = "0.24.0"
 num-quaternion = "1.0.7"
 socket2 = "0.6.1"
+chrono = "0.4.43"
