@@ -6,6 +6,7 @@ use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SO
 
 const ORIGIN_GPS_DATA: GPSData= GPSData{longitude: 5.7932940640423904, latitude: 43.25157380084422};
 const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
+const GRAVITY: Vector3= Vector3{x: 0.0, y: -9.81, z: 0.0};
 
 #[derive(GodotClass)]
 #[class(init, base=Node3D)]
@@ -189,7 +190,7 @@ impl INode3D for AutonomyNode{
         }
     }
 
-    fn process(&mut self, delta: f64) {
+    fn physics_process(&mut self, delta: f64) {
         //godot_print!("Motion command: {:?}\n", self.motion_command);
         //godot_print!("{}\n", delta);
         //Detect the collision point between the raycast and the rigidBodies in the scene
@@ -210,8 +211,8 @@ impl INode3D for AutonomyNode{
                     true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
-                    let mut godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - robot.get_gravity();
-                    godot_linear_accel /= robot.get_gravity().y.abs();
+                    let mut godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - GRAVITY;
+                    godot_linear_accel /= GRAVITY.y.abs();
                     self.last_linear_vel = robot.get_linear_velocity();
 
                     // 2. Get Rotation and Angular Velocity
@@ -223,7 +224,7 @@ impl INode3D for AutonomyNode{
                     let mut local_accel = robot_q.inverse() * godot_linear_accel;
                     let local_mag   = robot_q.inverse() * self.world_magnetic_field;
                     let local_gyro  = robot_q.inverse() * godot_angular_vel; // If angular_vel is in world coords
-
+                    local_accel= local_accel.normalized();
                     // 4. Map Godot (Y-Up) to IMU (Z-Up) Convention
                     // Godot X -> IMU X (Forward)
                     // Godot Y -> IMU Z (Up)
@@ -308,11 +309,10 @@ impl INode3D for AutonomyNode{
                     //IF the UDP module exist
                     if let Some(udp_worker)= &self.udp_worker && let Some(debug_udp) = &self.debug_worker {
                         if measurements.len() > 0 {
-                            //godot_print!("Elapsed Time= {}", self.dt);
                             if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
-                                /*if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
+                                if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
                                     godot_print!("Send Late\n")
-                                }*/
+                                }
                                 //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
