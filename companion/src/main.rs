@@ -223,15 +223,15 @@ fn main() {
 
     });*/
 
-    let state_covariance= Mat::<f64>::identity(3, 3)*0.01;
+    let state_covariance= Mat::<f64>::identity(3, 3)*0.05;
     //Q matrix => Noise of the state that comes with the sensor input measurements (gyrometer)
-    let sate_process_noise= Mat::<f64>::identity(3, 3)*0.01;
+    let sate_process_noise= Mat::<f64>::identity(3, 3)*0.05;
 
     //R matrix => Noise of the ref sensors (Accelerometer and Magnetometer)
     let mut bind = Mat::<f64>::identity(6, 6);
     let mut measurement_noise= bind.as_mut();
     let diag= [
-                            0.01, 0.01, 0.01,   //Accelerometer measurements noise 
+                            0.05, 0.05, 0.05,   //Accelerometer measurements noise 
                             0.1, 0.1, 0.1       //Magnetometer measurements noise
                         ];
     for i in 0..diag.len() {

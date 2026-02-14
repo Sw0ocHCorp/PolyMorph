@@ -1,7 +1,7 @@
 use std::f64;
 
 use faer::{Col, Mat, col, mat, matrix_free::LinOp, prelude::Solve, traits::math_utils::zero};
-use num_quaternion::{Q64, Quaternion, UnitQuaternion};
+use num_quaternion::{Q64, Quaternion, UQ64, UnitQuaternion};
 use robomorph::{core::file_logger::FileLogger, filtering::kalman_filter::{self, KalmanMeasurements, UnscentedKalmanFilter}};
 
 const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
@@ -151,10 +151,10 @@ impl UnscentedKalmanFilter for OrientationUKF {
         }
         self.logger.add_logs(format!("Transformed sigma points= {:?}\n", sigma_points));
         //println!("Transformed sigma points= {:?}", sigma_points);
-        let mut predicted_state= self.compute_mean_points(sigma_points.clone(), 0.55);
+        let mut predicted_state= self.compute_mean_points(sigma_points.clone(), 0.0);
         self.logger.add_logs(format!("Mean point= {:?}\n", predicted_state));
         //println!("Mean point= {:?}", predicted_state);
-        let state_cov= self.update_state_covariance_from_predict(&predicted_state, &sigma_points, state_covariance, 0.55);
+        let state_cov= self.update_state_covariance_from_predict(&predicted_state, &sigma_points, state_covariance, 0.0);
         
         return (predicted_state, state_cov);
     }
@@ -170,23 +170,23 @@ impl UnscentedKalmanFilter for OrientationUKF {
         let measurements_noise= self.get_measurements_noise();
         let scale_factor= spread_factor.powf(2.0)*(nrows + kalman_filter::KAPPA) - nrows;
         let scale= nrows + scale_factor;
-        let mut base_sigma_points= Self::generate_sigma_points(&predicted_state, scale, &state_covariance);
-        self.logger.add_logs(format!("Based sigma points= {:?}\n", base_sigma_points));
-        //println!("Based sigma points= {:?}", base_sigma_points);
-        let mut transformed_sigma_points= Vec::new();
-        for i in 0..base_sigma_points.len() {
+        let mut quat_sigma_points= Self::generate_sigma_points(&predicted_state, scale, &state_covariance);
+        self.logger.add_logs(format!("Sigma points in Quaternion space= {:?}\n", quat_sigma_points));
+        //println!("Based sigma points= {:?}", quat_sigma_points);
+        let mut theoric_sigma_points= Vec::new();
+        for i in 0..quat_sigma_points.len() {
             //Conversion of the sigma points state space to the ref measurements space to be able to compare them
             //  The transformed sigma point represent the theoric ref sensor measurements at the given sigma point state
-            let transformed_sigma_point= Self::apply_ref_measurements_function(base_sigma_points[i].clone(), observed_measurements.nrows());
-            transformed_sigma_points.push(transformed_sigma_point);
+            let transformed_sigma_point= Self::apply_ref_measurements_function(quat_sigma_points[i].clone(), observed_measurements.nrows());
+            theoric_sigma_points.push(transformed_sigma_point);
         }
-        self.logger.add_logs(format!("Transformed sigma points= {:?}\n", transformed_sigma_points));
-        //println!("Transformed sigma points= {:?}", transformed_sigma_points);
+        self.logger.add_logs(format!("Theoric Sigma points Ref measurements space = {:?}\n", theoric_sigma_points));
+        //println!("Transformed sigma points= {:?}", theoric_sigma_points);
         //Compute the mean points of the theoric sensor measurements at time T
-        let measured_state= self.compute_mean_points(transformed_sigma_points.clone(), 0.55);
+        let measured_state= self.compute_mean_points(theoric_sigma_points.clone(), 0.0);
         self.logger.add_logs(format!("Mean point= {:?}\n", measured_state));
         //println!("Mean point= {:?}", measured_state);
-        let (innovation_covariance, cross_covariance)= self.compute_cross_innov_covariances(&base_sigma_points, &transformed_sigma_points, &predicted_state, &measured_state, &state_covariance, 0.55);
+        let (innovation_covariance, cross_covariance)= self.compute_cross_innov_covariances(&quat_sigma_points, &theoric_sigma_points, &predicted_state, &measured_state, &state_covariance, 0.0);
         //Computation of the Kalman Gain:
         //  Model the confidence tradeoff between the predict state and the ref sensor measurements 
         let binding = innovation_covariance.clone().qr().solve(cross_covariance.clone().transpose());
@@ -318,14 +318,18 @@ impl UnscentedKalmanFilter for OrientationUKF {
         //println!("Scale= {:?}", scale);
         //Compute the state covariance (uncertainty in the state variables)
         let mut state_cov= Mat::<f64>::zeros(state_covariance.nrows(), state_covariance.ncols());
-        let mean_quat= w0 * Q64::new(mean_point[0], mean_point[1], mean_point[2], mean_point[3]);
+        let mean_quat= Q64::new(mean_point[0], mean_point[1], mean_point[2], mean_point[3]);
         self.logger.add_logs(format!("Mean quat= {:?}\n", mean_quat));
         //println!("Mean quat= {:?}", mean_quat);
-        for i in 1..sigma_points.len() {
+        for i in 0..sigma_points.len() {
             let sigma_quat= Q64::new(sigma_points[i][0], sigma_points[i][1], sigma_points[i][2], sigma_points[i][3]);
             self.logger.add_logs(format!("Sigma quat= {:?}\n", sigma_quat));
             //println!("Sigma quat= {:?}", sigma_quat);
-            let weight= (1.0-w0)/(sigma_points.len() as f64 - 1.0);
+            let weight= if i ==0 {
+                w0
+            } else {
+                (1.0-w0)/(sigma_points.len() as f64 - 1.0)
+            };
             //println!("Weight= {:?}", weight);
             //Compute the "distance" between the sigma points and the center of the distribution
             if let Some(delta_q)= (sigma_quat*mean_quat.conj()).normalize() {
@@ -378,8 +382,8 @@ impl UnscentedKalmanFilter for OrientationUKF {
     fn get_measurements_noise(&self) -> Mat<f64> {
         return self.measurements_noise.clone();
     }
-
-    fn compute_cross_innov_covariances(&self, base_sigma_points: &Vec<Col<f64>>, transformed_sigma_points: &Vec<Col<f64>>, predicted_state: &Col<f64>, measured_state: &Col<f64>, state_covariance: &Mat<f64>, w0: f64) -> (Mat<f64>, Mat<f64>) {
+    
+    fn compute_cross_innov_covariances(&self, quat_sigma_points: &Vec<Col<f64>>, theoric_sigma_points: &Vec<Col<f64>>, predicted_state: &Col<f64>, measured_state: &Col<f64>, state_covariance: &Mat<f64>, w0: f64) -> (Mat<f64>, Mat<f64>) {
         let nrows= state_covariance.nrows() as f64;
         let spread_factor= self.get_spread_factor();
         let prior_knowledge= self.get_prior_knowledge();
@@ -393,18 +397,33 @@ impl UnscentedKalmanFilter for OrientationUKF {
         //  The uncertainty of the theoric ref sensor measurements
         let mut innovation_covariance= Mat::<f64>::zeros(measured_state.nrows(), measured_state.nrows());
         let binding= Q64::new(predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]);
-        if let Some(predicted_quat)= binding.normalize() {
+        if let Some(mean_quat)= binding.normalize() {
             //Computation of the covariances
-            for i in 1..base_sigma_points.len() {
-                let weight= (1.0-w0)/(base_sigma_points.len() as f64 - 1.0);
-                innovation_covariance += weight * (&transformed_sigma_points[i] - measured_state)*(&transformed_sigma_points[i] - measured_state).transpose();
-                let binding= Q64::new(base_sigma_points[i][0], base_sigma_points[i][1], base_sigma_points[i][2], base_sigma_points[i][3]);
-                if let Some(sigma_quat)= binding.normalize() {
-                    let binding= (sigma_quat*predicted_quat.conj());
-                    let diff_quat= binding.as_quaternion();
-                    let sgn = if diff_quat.w < 0.0 { -1.0 } else { 1.0 };
-                    let error_vec = col![sgn * diff_quat.x, sgn * diff_quat.y, sgn * diff_quat.z];
-                    cross_covariance += weight * error_vec *(&transformed_sigma_points[i] - measured_state).transpose()
+            for i in 0..quat_sigma_points.len() {
+                let weight = if i == 0 { 
+                    w0 
+                } else { 
+                    (1.0 - w0) / (quat_sigma_points.len() as f64 - 1.0) 
+                };
+                innovation_covariance += weight * (&theoric_sigma_points[i] - measured_state)*(&theoric_sigma_points[i] - measured_state).transpose();
+                let sigma_quat= Q64::new(quat_sigma_points[i][0], quat_sigma_points[i][1], quat_sigma_points[i][2], quat_sigma_points[i][3]);
+                if let Some(delta_q)= (sigma_quat*mean_quat.conj()).normalize() {
+                    let diff_quat= delta_q.as_quaternion();
+                    self.logger.add_logs(format!("Error Quaternion= {:?}\n", diff_quat));
+                    //println!("Error Quaternion= {:?}", diff_quat);
+                    let vec_part= col![diff_quat.x, diff_quat.y, diff_quat.z];
+                    self.logger.add_logs(format!("Vector par of the Quaternion= {:?}\n", vec_part));
+                    //println!("Vector par of the Quaternion= {:?}", vec_part);
+                    let norm= vec_part.norm_l2();
+                    let error_vec= if norm < 1e-8 {
+                        col![0.0, 0.0, 0.0]
+                    } else {
+                        let angle = 2.0 * f64::atan2(norm, diff_quat.w);
+                        vec_part * (angle / norm)
+                    };
+                    self.logger.add_logs(format!("Error vector= {:?}\n", error_vec));
+                    //println!("Error vector= {:?}", error_vec);
+                    cross_covariance += weight * error_vec *(&theoric_sigma_points[i] - measured_state).transpose()
                 }
             }
             innovation_covariance += &measurements_noise;
@@ -416,17 +435,23 @@ impl UnscentedKalmanFilter for OrientationUKF {
         } else {
             return (mat![[0.0]], mat![[0.0]]);
         }
-        
     }
 
     fn compute_final_state(&self, predicted_state: &Col<f64>, kalman_gain: &Mat<f64>, innovation: &Col<f64>) -> Col<f64> {
         let delta_vec= kalman_gain * innovation;
-        let delta_quat= Q64::new(1.0, delta_vec[0] / 2.0, delta_vec[1] / 2.0, delta_vec[2] / 2.0);
+        let angle = delta_vec.norm_l2();
+        let delta_quat = if angle < 1e-8 {
+            Q64::new(1.0, delta_vec[0] / 2.0, delta_vec[1] / 2.0, delta_vec[2] / 2.0)
+        } else {
+            let half_angle = angle / 2.0;
+            let s = f64::sin(half_angle) / angle;
+            Q64::new(f64::cos(half_angle), delta_vec[0] * s, delta_vec[1] * s, delta_vec[2] * s)
+        };
         if let Some(dq_norm) = delta_quat.normalize() {
             let predicted_quat = Q64::new(predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]);
             
             // Updated state = dq * q_pred (Post-multiply or pre-multiply depends on your frame convention)
-            let updated_quat = predicted_quat*dq_norm;
+            let updated_quat = dq_norm*predicted_quat;
             
             // Ensure it's normalized to prevent drift over time
             if let Some(final_quat) = updated_quat.normalize() {
