@@ -181,7 +181,7 @@ mod test_serialization_deserialization {
                               88, 65, 20, 65, 88, 44, 231, 65, 88, 38, 88, 65, 88, 45, 100, 65, 88, 66, 15, 65, 88, 100, 96, 65, 88, 68, 76, 65, 88, 45, 65, 65, 88, 35,
                                215, 65, 88, 40, 9, 65, 88, 57, 213, 64, 143, 137, 223, 64, 143, 82, 205, 64, 143, 37, 2, 64, 143, 0, 115, 64, 142, 229, 16, 64, 142, 210, 212, 64, 142, 201, 183];
         let translatables= messages::parse_frame(test_frame);
-        let mut imu_measurements= IMUData { accel: [0.0, -0.0, 0.5385452508926392], gyro: [0.0, -0.0, 0.0], magnetic_field: [0.3491528332233429, -0.0098767951130867, -0.9370137453079224] };
+        let mut imu_measurements= IMUData { accel: [0.0, -0.0, 0.5385452508926392], gyro: [0.0, -0.0, 0.0], magnetic_field: [0.3491528332233429, -0.0098767951130867, -0.9370137453079224], elapsed_time: 0.01 };
         println!("{:?}", imu_measurements.to_bytes());
         let mut imu= IMUData::new();
         let _= imu.fill_from_bytes(imu_measurements.to_bytes());
