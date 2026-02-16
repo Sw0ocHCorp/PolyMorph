@@ -1,4 +1,4 @@
-use std::f64;
+use std::{f64, time::Instant};
 
 use faer::{Col, Mat, col, mat, matrix_free::LinOp};
 use num_quaternion::Q64;
@@ -69,16 +69,16 @@ pub struct OrientationUKF {
     spread_factor: f64,
     //
     prior_knowledge: f64,
-    logger: FileLogger,
+    logger: Option<FileLogger>,
     
 }
 
 impl OrientationUKF {
     pub fn new (init_state: Col<f64>, state_covariance: Mat<f64>, measurements_noise: Mat<f64>, state_process_noise: Mat<f64>, 
                                                     spread_factor:f64, prior_knowledge: f64) -> Self {
-        let logger= FileLogger::new("Logs".to_string());
+        //let logger= FileLogger::new("Logs".to_string());
         return Self { current_state: init_state, state_covariance: state_covariance, 
-                        measurements_noise, state_process_noise, spread_factor, prior_knowledge, logger: logger};
+                        measurements_noise, state_process_noise, spread_factor, prior_knowledge, logger: None};
     }
 
     //Specific mean computation from the state distribution in the quaternion space
@@ -134,6 +134,7 @@ impl OrientationUKF {
 
     //Pipeline to compute the estimated state from all the sensors measurements
     pub fn estimate_true_state(&mut self, meas: KalmanMeasurements) -> Col<f64> {
+        let start= Instant::now();
         let (predicted_state, state_covariance)= self.predict(&self.current_state, &meas.input_sensor_measurements, meas.delta_time, &self.state_covariance);
         self.current_state= predicted_state.clone();
         let (true_state, update_state_cov)= self.update_prediction(&predicted_state, &meas.ref_sensor_measurements, &state_covariance);

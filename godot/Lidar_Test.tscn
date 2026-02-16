@@ -1,5 +1,7 @@
 [gd_scene load_steps=19 format=3 uid="uid://bdey3wykb1poq"]
 
+[ext_resource type="ArrayMesh" uid="uid://cjer5l357t1ld" path="res://Drone_models/Osprey_Bicoptere_central.obj" id="1_8xs5q"]
+
 [sub_resource type="Environment" id="Environment_ii0s2"]
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_ii0s2"]
@@ -9,12 +11,11 @@ albedo_color = Color(0, 0, 0, 0)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_yrb85"]
 
-[sub_resource type="BoxMesh" id="BoxMesh_ii0s2"]
-
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_yrb85"]
 albedo_color = Color(0, 0, 0, 0)
 
-[sub_resource type="BoxShape3D" id="BoxShape3D_diffx"]
+[sub_resource type="BoxShape3D" id="BoxShape3D_snh11"]
+size = Vector3(1.8013916, 1.5133057, 3.0077515)
 
 [sub_resource type="TorusMesh" id="TorusMesh_ii0s2"]
 
@@ -67,7 +68,7 @@ shape = SubResource("BoxShape3D_yrb85")
 debug_color = Color(0.6117647, 0.3882353, 0.9490196, 1)
 
 [node name="Robot" type="RigidBody3D" parent="."]
-transform = Transform3D(0.9999998, 0, 0, 0, 1, 0, 0, 0, 0.9999998, 0, 1, 0)
+transform = Transform3D(0.9999998, 0, 0, 0, 1, 0, 0, 0, 0.9999998, 0, 0, 0)
 
 [node name="AutonomyNode" type="AutonomyNode" parent="Robot"]
 metadata/lidarPoints = 400
@@ -79,30 +80,30 @@ metadata/dataFrequency = 60
 metadata/gpsFrequency = 5
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
-transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.0003733635, 0, 0)
-mesh = SubResource("BoxMesh_ii0s2")
+transform = Transform3D(-1.3113417e-08, 0.3, 1.3113417e-08, 0, -1.3113417e-08, 0.3, 0.3, 1.3113417e-08, 5.7320567e-16, 0.0003733635, 0, 0)
+mesh = ExtResource("1_8xs5q")
 skeleton = NodePath("")
 surface_material_override/0 = SubResource("StandardMaterial3D_yrb85")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Robot"]
-transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.0003733635, 0, 0)
-shape = SubResource("BoxShape3D_diffx")
-debug_color = Color(0, 0.6, 0.69803923, 1)
+transform = Transform3D(0.9999544, 0, 0, 0, 1, 0, 0, 0, 0.9999544, 0.14873677, 0.7526245, -8.8334025e-05)
+shape = SubResource("BoxShape3D_snh11")
+debug_color = Color(0, 0.57254905, 0.6666667, 1)
 
 [node name="StereoCam1VP" type="SubViewport" parent="Robot"]
 
 [node name="StereoCam1" type="Camera3D" parent="Robot/StereoCam1VP"]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 1, 2, -0.2)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.7049998, 1.5, -0.19999997)
 
 [node name="StereoCam2VP" type="SubViewport" parent="Robot"]
 
 [node name="StereoCam2" type="Camera3D" parent="Robot/StereoCam2VP"]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 1, 2, 0.2)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70499986, 1.5, 0.19999997)
 
 [node name="MonoCamVP" type="SubViewport" parent="Robot"]
 
 [node name="MonoCam" type="Camera3D" parent="Robot/MonoCamVP"]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 1, 2, 0)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70499986, 1.5, 0)
 current = true
 
 [node name="StaticBody3D" type="StaticBody3D" parent="."]
