@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, SystemTime}};
 
-use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
+use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, StaticBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
 use ordered_float::OrderedFloat;
 use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData}};
 
@@ -25,7 +25,9 @@ pub struct AutonomyNode {
     data_fps: u32,
     gps_frequency: u32,
     dt: f64,
-    gps_dt: f64
+    gps_dt: f64,
+    wing_speed: f64,
+    wing_positions: [f32; 2]
 }
 #[godot_api]
 /**
@@ -133,8 +135,23 @@ impl INode3D for AutonomyNode{
                 },
             } 
         } else {
-            godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
-            self.data_fps= 10;
+            godot_script_error!("/!\\ ERROR: No gpsFrequency metadata exist.\nYou should add a metadata called \"gpsFrequency\" with u32 as type");
+            self.gps_frequency= 10;
+        }
+        if self.base().has_meta("wingRotationSpeed") {
+            match self.base().get_meta("wingRotationSpeed").try_to::<f32>() {
+                Ok(data_frequency) => {
+                    self.wing_speed= data_frequency as f64;
+                    godot_print!("Loading wingRotationSpeed metadata succesful, It's value is= {}", data_frequency);
+                },
+                Err(_) => {
+                    godot_print!("/!\\ ERROR: wingRotationSpeed conversion in f32 failed.\nYou should change the metadata type in float");
+                    self.wing_speed= 90.0;
+                },
+            } 
+        } else {
+            godot_script_error!("/!\\ ERROR: No wingRotationSpeed metadata exist.\nYou should add a metadata called \"wingRotationSpeed\" with float as type");
+            self.wing_speed= 90.0;
         }
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
@@ -155,6 +172,14 @@ impl INode3D for AutonomyNode{
                 }
                 if button_event.get_button_index() == JoyButton::B {
                     self.motion_command= [0.0, -1.0];
+                }
+                if button_event.get_button_index() == JoyButton::Y {
+                    self.wing_positions[0] -= 90.0;
+                    self.wing_positions[1] += 90.0;
+                    if f32::abs(self.wing_positions[0]) > 90.0 {
+                        self.wing_positions[0] = 90.0;
+                        self.wing_positions[1] = -90.0;
+                    }
                 }
                 //godot_print!("Joypad button detected: {:?}\n", button_event.get_button_index());
             },
@@ -206,6 +231,27 @@ impl INode3D for AutonomyNode{
             //Generate lidar_points times raycast measurement for lidar_fov°
             match parent_obj.clone().try_cast::<RigidBody3D>() {
                 Ok(mut robot) => {
+                    godot_print!("Wing Setpoints= {:?}", self.wing_positions);
+                    for i in 0..robot.get_child_count() {
+                        if let Some(child)= robot.get_child(i) {
+                            if let Ok(mut wing)= child.try_cast::<StaticBody3D>() {
+                                let mut wing_angles= wing.get_rotation_degrees();  // Changed from get_global_rotation_degrees()
+                                godot_print!("Wing Name: {:?}", wing.get_name().to_string());
+                                if wing.get_name().to_string() == "WingL".to_string() {
+                                    wing_angles.z= self.wing_positions[0];
+                                    godot_print!("Setpoint Rotation= {:?}", self.wing_positions[0]);
+                                } else {
+                                    wing_angles.z= self.wing_positions[1];
+                                    godot_print!("Setpoint Rotation= {:?}", self.wing_positions[1]);
+                                }
+                                wing.set_rotation_degrees(wing_angles);
+                                //godot_print!("Wing Location= {:?}\n", wing.get_global_position());
+                                godot_print!(" | Theoric {:?} Rotation= {:?}\n", wing.get_name().to_string(), wing_angles);
+                                godot_print!("Real Wing Rotation= {:?}\n", wing.get_global_rotation_degrees());
+                            }
+                        }
+                    }
+                    //if let Ok(wing_l) = robot.get_chil
                     let rob_orientation= robot.get_global_rotation();
                     
                     true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
@@ -248,8 +294,8 @@ impl INode3D for AutonomyNode{
                         ],
                         elapsed_time: self.dt
                     };
-                    godot_print!("Linear Accel:\n{:?}", godot_linear_accel);
-                    godot_print!("IMU Data:\n{:?}", imu_data);
+                    //godot_print!("Linear Accel:\n{:?}", godot_linear_accel);
+                    //godot_print!("IMU Data:\n{:?}", imu_data);
                     //Compute the velocities to apply to the robot from the joystick input
                     //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
                     let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };

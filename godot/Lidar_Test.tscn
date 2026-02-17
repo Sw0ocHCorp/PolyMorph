@@ -1,6 +1,8 @@
-[gd_scene load_steps=19 format=3 uid="uid://bdey3wykb1poq"]
+[gd_scene load_steps=21 format=3 uid="uid://bdey3wykb1poq"]
 
 [ext_resource type="ArrayMesh" uid="uid://cjer5l357t1ld" path="res://Drone_models/Osprey_Bicoptere_central.obj" id="1_8xs5q"]
+[ext_resource type="ArrayMesh" uid="uid://b1hk8ji17irxi" path="res://Drone_models/Osprey_Bicoptere_wingL.obj" id="2_snh11"]
+[ext_resource type="ArrayMesh" uid="uid://bn1efj2bvi2kx" path="res://Drone_models/Osprey_Bicoptere_wingR.obj" id="3_rh7ek"]
 
 [sub_resource type="Environment" id="Environment_ii0s2"]
 
@@ -57,7 +59,7 @@ fov = 100.0
 [node name="Ground" type="StaticBody3D" parent="."]
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
-transform = Transform3D(256, 0, 0, 0, 256, 0, 0, 0, 256, 0.010032654, -9.536743e-07, 0.04660988)
+transform = Transform3D(256, 0, 0, 0, 256, 0, 0, 0, 256, 0.025507927, 0.021118164, 0.05424118)
 mesh = SubResource("PlaneMesh_ii0s2")
 skeleton = NodePath("../..")
 surface_material_override/0 = SubResource("StandardMaterial3D_ii0s2")
@@ -78,6 +80,7 @@ metadata/maxNoiseDistance = 0.0
 metadata/lidarAngleOffset = 0.0
 metadata/dataFrequency = 60
 metadata/gpsFrequency = 5
+metadata/wingRotationSpeed = 100.0
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(-1.3113417e-08, 0.3, 1.3113417e-08, 0, -1.3113417e-08, 0.3, 0.3, 1.3113417e-08, 5.7320567e-16, 0.0003733635, 0, 0)
@@ -105,6 +108,30 @@ transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70
 [node name="MonoCam" type="Camera3D" parent="Robot/MonoCamVP"]
 transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70499986, 1.5, 0)
 current = true
+
+[node name="WingL" type="StaticBody3D" parent="Robot"]
+transform = Transform3D(-0.99999964, 0, 8.742275e-08, 0, 1, 0, -8.742275e-08, 0, -0.99999964, 0, 0.75, -1.4999999)
+axis_lock_linear_x = true
+axis_lock_linear_y = true
+axis_lock_linear_z = true
+axis_lock_angular_x = true
+axis_lock_angular_y = true
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingL"]
+transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
+mesh = ExtResource("2_snh11")
+
+[node name="WingR" type="StaticBody3D" parent="Robot"]
+transform = Transform3D(0.99999934, 0, 0, 0, 1, 0, 0, 0, 0.99999934, 0, 0.75, 1.5)
+axis_lock_linear_x = true
+axis_lock_linear_y = true
+axis_lock_linear_z = true
+axis_lock_angular_x = true
+axis_lock_angular_y = true
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingR"]
+transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
+mesh = ExtResource("3_rh7ek")
 
 [node name="StaticBody3D" type="StaticBody3D" parent="."]
 
