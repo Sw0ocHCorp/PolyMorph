@@ -4,7 +4,7 @@ pub mod filtering;
 pub mod positionning;
 pub mod control;
 pub mod core;
-mod actuators;
+pub mod actuators;
 
 #[cfg(test)]
 mod test_utils_functions {

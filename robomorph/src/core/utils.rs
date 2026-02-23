@@ -24,19 +24,36 @@ pub fn contain_bytes(src_bytes: Vec<u8>, target_bytes: Vec<u8>) -> i128{
     return start_index;
 }
 
-pub fn modulo_2pi(x: f64) -> f64 {
-    return x.rem_euclid(PI*2.0);
+pub fn modulo_2pi(x: f32) -> f32 {
+    return x.rem_euclid(std::f32::consts::PI*2.0);
 }
 
-pub fn modulo_pi(x: f64) -> f64 {
+pub fn modulo_pi(x: f32) -> f32 {
     // Use rem_euclid to do a mod in [0, 2π)
     let m = modulo_2pi(x);
 
     // Shift range from [0, 2π) to [-π, π)
-    if m >= PI {
-        m - PI*2.0
+    if m >= PI as f32 {
+        return m - std::f32::consts::PI*2.0;
     } else {
-        m
+        return m;
+    }
+}
+
+pub fn modulo_360(x: f32) -> f32 {
+    // Reduce to [0°, 360°)
+    return x.rem_euclid(360.0);
+}
+
+pub fn modulo_180(x: f32) -> f32 {
+    // First reduce to [0°, 360°)
+    let m = x.rem_euclid(360.0);
+
+    // Then shift to (−180°, +180°]
+    if m > 180.0 {
+        return m - 360.0;
+    } else {
+        return m
     }
 }
 
@@ -50,13 +67,27 @@ pub fn modulo_pi_f64(x: f64) -> f64 {
 
     // Shift range from [0, 2π) to [-π, π)
     if m >= std::f64::consts::PI {
-        m - std::f64::consts::PI*2.0
+        return m - std::f64::consts::PI*2.0;
     } else {
-        m
+        return m;
     }
 }
 
-pub fn euclidean_distance(pt1: Vec<f64>, pt2: Vec<f64>) -> f64 {
+pub fn modulo_360_f64(x: f64) -> f64 {
+    return x.rem_euclid(360.0);
+}
+
+pub fn modulo_180_f64(x: f64) -> f64 {
+    let m = x.rem_euclid(360.0);
+
+    if m > 180.0 {
+        return m - 360.0;
+    } else {
+        return m;
+    }
+}
+
+pub fn euclidean_distance(pt1: &Vec<f64>, pt2: &Vec<f64>) -> f64 {
     if pt1.len() == pt2.len() {
         let mut cumul= 0.0;
         for i in 0..pt1.len() {
@@ -80,6 +111,23 @@ pub fn compute_cross_product(a: Vec<f64>, b: Vec<f64>) -> Vec<f64> {
     } else {
         return vec![0.0];
     }
+}
+
+pub fn compute_vec_norm(vector: Vec<f64>) -> f64 {
+    let mut cumul= 0.0;
+    for e in vector {
+        cumul += e.powf(2.0)
+    }
+    return f64::sqrt(cumul);
+}
+
+pub fn compute_direction_vector(rawVec: [f64; 3]) -> [f64; 3] {
+    let norm= compute_vec_norm(rawVec.to_vec());
+    let mut dir_vec= rawVec;
+    for i in 0..dir_vec.len() {
+        dir_vec[i] /= norm;
+    }
+    return dir_vec;
 }
 
 pub fn local_to_global_frame(origin_gps_data: GPSData, x_pose: f64, y_pose: f64) -> GPSData{

@@ -57,8 +57,8 @@ impl LidarPerceptionManager {
             for pt in lidar_measurements.get_all_measurements() {
                 let pt_loc= pt.get_location();
                 let origin= pose.get_location();
-                if utils::euclidean_distance(vec![origin[0], origin[1]], vec![pt_loc[0], pt_loc[1]]) < 
-                            utils::euclidean_distance(vec![origin[0], origin[1]], vec![closest_point[0], closest_point[1]]){
+                if utils::euclidean_distance(&vec![origin[0], origin[1]], &vec![pt_loc[0], pt_loc[1]]) < 
+                            utils::euclidean_distance(&vec![origin[0], origin[1]], &vec![closest_point[0], closest_point[1]]){
                     closest_point= pt_loc;
                 }
             }

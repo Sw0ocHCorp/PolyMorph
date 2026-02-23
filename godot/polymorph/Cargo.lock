@@ -963,6 +963,7 @@ name = "polymorph"
 version = "0.1.0"
 dependencies = [
  "godot",
+ "num-quaternion",
  "ordered-float",
  "robomorph",
 ]

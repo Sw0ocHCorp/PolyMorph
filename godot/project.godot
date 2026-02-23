@@ -10,7 +10,7 @@ config_version=5
 
 [accessibility]
 
-general/updates_per_second=50
+general/updates_per_second=100
 
 [application]
 
@@ -30,7 +30,7 @@ project/assembly_name="PolyMorph"
 [importer_defaults]
 
 animation_library={
-&"animation/fps": 50.0
+&"animation/fps": 100.0
 }
 
 [input]
@@ -49,6 +49,10 @@ ui_up={
 , Object(InputEventJoypadMotion,"resource_local_to_scene":false,"resource_name":"","device":0,"axis":0,"axis_value":1.0,"script":null)
 ]
 }
+
+[physics]
+
+common/physics_ticks_per_second=100
 
 [threading]
 

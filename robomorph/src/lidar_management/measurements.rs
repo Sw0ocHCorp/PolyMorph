@@ -42,7 +42,7 @@ impl LidarPoint{
     pub fn new_from_location(location: [f64; 2], pose: Pose) -> Self {
         let origin= pose.get_location();
         let angle= f64::atan2(location[1] - origin[1], location[0] - origin[0]);
-        let distance= euclidean_distance(vec![origin[0], origin[1]], location.to_vec());
+        let distance= euclidean_distance(&vec![origin[0], origin[1]], &location.to_vec());
         return Self { angle, distance, location, cluster_id: 0};
     }
 

@@ -1,8 +1,11 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, SystemTime}};
 
 use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, StaticBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
+use num_quaternion::UQ64;
 use ordered_float::OrderedFloat;
-use robomorph::{communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData}};
+use robomorph::{actuators::mixer_model::MixerModel, communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData, Pose}};
+
+use crate::control_command::osprey_bicopter_mixer::OspreyBicopterMixer;
 
 const ORIGIN_GPS_DATA: GPSData= GPSData{longitude: 5.7932940640423904, latitude: 43.25157380084422};
 const REF_WORLD_MAGNETIC_FIELD: [f64; 3] = [15.3017, 0.4328527, -41.06483];
@@ -19,7 +22,6 @@ pub struct AutonomyNode {
     lidar_fov: f64,
     lidar_angle_offset: f64,
     motion_command: [f32; 2],
-    motion_factor: f32,
     last_linear_vel: Vector3,
     world_magnetic_field: Vector3,
     data_fps: u32,
@@ -27,7 +29,8 @@ pub struct AutonomyNode {
     dt: f64,
     gps_dt: f64,
     wing_speed: f64,
-    wing_positions: [f32; 2]
+    waypoint: [f64; 3],
+    mixer: OspreyBicopterMixer
 }
 #[godot_api]
 /**
@@ -37,122 +40,132 @@ pub struct AutonomyNode {
 impl INode3D for AutonomyNode{
 
     fn ready(&mut self) {
-        //let test= vec![]
+        //Get and store the metadata of the 
+        if self.base().has_meta("lidarPoints") && let Ok(lidar_points) = self.base().get_meta("lidarPoints").try_to::<i32>() && lidar_points > 0 {
+            self.lidar_points= lidar_points as u32;
+            godot_print!("Loading lidarPoints metadata succesfully, It's value is= {}", lidar_points);
+        } else {
+            godot_print!("/!\\ ERROR: unknown lidarPoints metadata");
+            self.lidar_points= 100;
+        }
+
+        if self.base().has_meta("lidarFov") && let Ok(lidar_fov) = self.base().get_meta("lidarFov").try_to::<i32>() {
+            self.lidar_fov= (lidar_fov as f64).to_radians();
+            godot_print!("Loading lidarFov metadata succesfully, It's value is= {}°", lidar_fov);
+        } 
+        else {
+            godot_print!("/!\\ ERROR: unknown lidarFov metadata");
+            self.lidar_fov= (180 as f64).to_radians();
+        }
+
+        if self.base().has_meta("lidarAngleOffset") && let Ok(lidar_angle_offset) = self.base().get_meta("lidarAngleOffset").try_to::<i32>() {
+            self.lidar_angle_offset= (lidar_angle_offset as f64).to_radians();
+            godot_print!("Loading lidarAngleOffset metadata succesfully, It's value is= {}°", lidar_angle_offset);
+        } else {
+            godot_print!("/!\\ ERROR: unknown lidarAngleOffset metadata");
+            self.lidar_angle_offset= 0 as f64;
+        }
+
+        if self.base().has_meta("dataFrequency") && let Ok(data_frequency) = self.base().get_meta("dataFrequency").try_to::<u32>() {
+            self.data_fps= data_frequency;
+            godot_print!("Loading dataFrequency metadata succesfully, It's value is= {}Hz", data_frequency);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown dataFrequency metadata");
+            self.data_fps= 10;
+        } 
+
+        if self.base().has_meta("gpsFrequency") && let Ok(data_frequency) = self.base().get_meta("gpsFrequency").try_to::<u32>() {
+            self.gps_frequency= data_frequency;
+            godot_print!("Loading gpsFrequency metadata succesfully, It's value is= {}Hz", data_frequency);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown gpsFrequency metadata");
+            self.gps_frequency= 1;
+        }
+
+        let mut wing_pid_factors= [1.0, 0.0, 0.0];
+        let mut max_wing_angle_error= 90.0;
+        let mut wing_angle_threshold= 1.0;
+        let mut thruster_pid_factors= [1.0, 0.0, 0.0];
+        let mut max_location_error= 10.0;
+        let mut dist_threshold= 0.5;
+        if self.base().has_meta("wingPIDFactors") && let Ok(factors) = self.base().get_meta("wingPIDFactors").try_to::<Vector3>() {
+            wing_pid_factors= [factors.x as f64, factors.y as f64, factors.z as f64];
+            godot_print!("Loading wingPIDFactors metadata succesfully, It's value is= P= {} | I= {} | D= {}", wing_pid_factors[0], wing_pid_factors[1], wing_pid_factors[2]);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown wingPIDFactors metadata");
+            self.wing_speed= 90.0;
+        }
+
+        if self.base().has_meta("wingMaxRotationSpeed") && let Ok(wing_rotation_speed) = self.base().get_meta("wingMaxRotationSpeed").try_to::<f32>() {
+            self.wing_speed= wing_rotation_speed as f64;
+            godot_print!("Loading wingMaxRotationSpeed metadata succesfully, It's value is= {}°/s", wing_rotation_speed);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown wingMaxRotationSpeed metadata");
+            self.wing_speed= 90.0;
+        }
+
+        if self.base().has_meta("maxWingAngleError") && let Ok(wing_angle_error) = self.base().get_meta("maxWingAngleError").try_to::<f32>() {
+            max_wing_angle_error= wing_angle_error as f64;
+            godot_print!("Loading maxWingAngleError metadata succesfully, It's value is= {}°", wing_angle_error);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown maxWingAngleError metadata");
+        }
+
+        if self.base().has_meta("wingAngleThreshold") && let Ok(angle_threshold) = self.base().get_meta("wingAngleThreshold").try_to::<f32>() {
+            wing_angle_threshold= angle_threshold as f64;
+            godot_print!("Loading wingAngleThreshold metadata succesfully, It's value is= {}°", angle_threshold);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown wingAngleThreshold metadata");
+        }
+
+        if self.base().has_meta("thrusterPIDFactors") && let Ok(factors) = self.base().get_meta("thrusterPIDFactors").try_to::<Vector3>() {
+            thruster_pid_factors= [factors.x as f64, factors.y as f64, factors.z as f64];
+            godot_print!("Loading thrusterPIDFactors metadata succesfully, It's value is= P= {} | I= {} | D= {}", thruster_pid_factors[0], thruster_pid_factors[1], thruster_pid_factors[2]);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown thrusterPIDFactors metadata");
+            self.wing_speed= 90.0;
+        }
+
+        if self.base().has_meta("maxLocationError") && let Ok(location_error) = self.base().get_meta("maxLocationError").try_to::<f32>() {
+            max_location_error= location_error as f64;
+            godot_print!("Loading maxWingAngleError metadata succesfully, It's value is= {}m", max_location_error);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown maxWingAngleError metadata");
+        }
+
+        if self.base().has_meta("distThreshold") && let Ok(dist_thresh) = self.base().get_meta("distThreshold").try_to::<f32>() {
+            dist_threshold= dist_thresh as f64;
+            godot_print!("Loading distThreshold metadata succesfully, It's value is= {}m", dist_thresh);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown distThreshold metadata");
+        }
+
+        if self.base().has_meta("wayPoint") && let Ok(waypoint) = self.base().get_meta("wayPoint").try_to::<Vector3>() {
+            self.waypoint= [waypoint.x as f64, waypoint.y as f64, waypoint.z as f64];
+            godot_print!("Loading wayPoint metadata succesfully, It's value is= {:?}", self.waypoint);
+        }
+        else {
+            godot_print!("/!\\ ERROR: unknown wayPoint metadata");
+            self.waypoint= [0.0, 0.0, 0.0];
+        }
+
         self.world_magnetic_field= Vector3 { x: REF_WORLD_MAGNETIC_FIELD[0] as f32, y: REF_WORLD_MAGNETIC_FIELD[2] as f32, z: REF_WORLD_MAGNETIC_FIELD[1] as f32 };
         self.world_magnetic_field= self.world_magnetic_field.normalized();
         let udp= UDPChannel::new_async("127.0.0.1", 8080, "127.0.0.1", 8090);
         let udp_debug= UDPChannel::new_async("127.0.0.1", 9010, "127.0.0.1", 9000);
-        //Get and store the metadata of the 
-        if self.base().has_meta("lidarPoints") {
-            match self.base().get_meta("lidarPoints").try_to::<i32>() {
-                Ok(lidar_points) => {
-                    if lidar_points > 0 {
-                        self.lidar_points= lidar_points as u32;
-                        godot_print!("Loading lidarPoints metadata succesful, It's value is= {}", lidar_points);
-                    } else {
-                        godot_print!("/!\\ ERROR: lidarPoints metadata must be > 0.\nYou should change its value");
-                        self.lidar_points= 100;
-                    }
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: lidarPoints conversion in i32 failed.\nYou should change the metadata type in int");
-                    self.lidar_points= 100;
-                },
-            } 
-        } else {
-            godot_print!("/!\\ ERROR: No lidarPoints metadata exist.\nYou should add a metadata called \"lidarPoints\" with int as type");
-            self.lidar_points= 100;
-        }
-        if self.base().has_meta("lidarFov") {
-            match self.base().get_meta("lidarFov").try_to::<i32>() {
-                Ok(lidar_fov) => {
-                    self.lidar_fov= (lidar_fov as f64).to_radians();
-                    godot_print!("Loading lidarFov metadata succesful, It's value is= {}°", lidar_fov);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: lidarFov conversion in i32 failed.\nYou should change the metadata type in int");
-                    self.lidar_fov= (180 as f64).to_radians();
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No lidarFov metadata exist.\nYou should add a metadata called \"lidarFov\" with int as type");
-            self.lidar_fov= (180 as f64).to_radians();
-        }
-        if self.base().has_meta("lidarAngleOffset") {
-            match self.base().get_meta("lidarAngleOffset").try_to::<i32>() {
-                Ok(lidar_angle_offset) => {
-                    self.lidar_angle_offset= (lidar_angle_offset as f64).to_radians();
-                    godot_print!("Loading lidarAngleOffset metadata succesful, It's value is= {}°", lidar_angle_offset);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: lidarAngleOffset conversion in i32 failed.\nYou should change the metadata type in int");
-                    self.lidar_angle_offset= 0 as f64;
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No lidarAngleOffset metadata exist.\nYou should add a metadata called \"lidarFov\" with int as type");
-            self.lidar_angle_offset= 0 as f64;
-        }
-        if self.base().has_meta("motionFactor") {
-            match self.base().get_meta("motionFactor").try_to::<f32>() {
-                Ok(motion_factor) => {
-                    self.motion_factor= motion_factor;
-                    godot_print!("Loading motionFactor metadata succesful, It's value is= {}", motion_factor);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: motionFactor conversion in f32 failed.\nYou should change the metadata type in float");
-                    self.motion_factor= 1.0;
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No motionFactor metadata exist.\nYou should add a metadata called \"motionFactor\" with float as type");
-            self.motion_factor= 1.0;
-        }
-        if self.base().has_meta("dataFrequency") {
-            match self.base().get_meta("dataFrequency").try_to::<u32>() {
-                Ok(data_frequency) => {
-                    self.data_fps= data_frequency;
-                    godot_print!("Loading dataFrequency metadata succesful, It's value is= {}", data_frequency);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: dataFrequency conversion in f32 failed.\nYou should change the metadata type in u32");
-                    self.data_fps= 10;
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No dataFrequency metadata exist.\nYou should add a metadata called \"dataFrequency\" with u32 as type");
-            self.data_fps= 10;
-        }
-        if self.base().has_meta("gpsFrequency") {
-            match self.base().get_meta("gpsFrequency").try_to::<u32>() {
-                Ok(data_frequency) => {
-                    self.gps_frequency= data_frequency;
-                    godot_print!("Loading gpsFrequency metadata succesful, It's value is= {}", data_frequency);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: gpsFrequency conversion in f32 failed.\nYou should change the metadata type in u32");
-                    self.gps_frequency= 1;
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No gpsFrequency metadata exist.\nYou should add a metadata called \"gpsFrequency\" with u32 as type");
-            self.gps_frequency= 10;
-        }
-        if self.base().has_meta("wingRotationSpeed") {
-            match self.base().get_meta("wingRotationSpeed").try_to::<f32>() {
-                Ok(data_frequency) => {
-                    self.wing_speed= data_frequency as f64;
-                    godot_print!("Loading wingRotationSpeed metadata succesful, It's value is= {}", data_frequency);
-                },
-                Err(_) => {
-                    godot_print!("/!\\ ERROR: wingRotationSpeed conversion in f32 failed.\nYou should change the metadata type in float");
-                    self.wing_speed= 90.0;
-                },
-            } 
-        } else {
-            godot_script_error!("/!\\ ERROR: No wingRotationSpeed metadata exist.\nYou should add a metadata called \"wingRotationSpeed\" with float as type");
-            self.wing_speed= 90.0;
-        }
+        let init_pose= Pose::new(GPSData{latitude: 0.0, longitude: 0.0}, [0.0, 0.0, 0.0], 
+                                                        UQ64::one(), 
+                                                        [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        self.mixer = OspreyBicopterMixer::new(init_pose, wing_pid_factors, max_wing_angle_error, wing_angle_threshold, thruster_pid_factors, max_location_error, dist_threshold);
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
 
@@ -172,14 +185,6 @@ impl INode3D for AutonomyNode{
                 }
                 if button_event.get_button_index() == JoyButton::B {
                     self.motion_command= [0.0, -1.0];
-                }
-                if button_event.get_button_index() == JoyButton::Y {
-                    self.wing_positions[0] -= 90.0;
-                    self.wing_positions[1] += 90.0;
-                    if f32::abs(self.wing_positions[0]) > 90.0 {
-                        self.wing_positions[0] = 90.0;
-                        self.wing_positions[1] = -90.0;
-                    }
                 }
                 //godot_print!("Joypad button detected: {:?}\n", button_event.get_button_index());
             },
@@ -228,27 +233,27 @@ impl INode3D for AutonomyNode{
         let mut true_orientation:[f32; 3]= [0.0, 0.0, 0.0];
         //IF this node had a parent
         if let Some(mut parent_obj) = self.base().get_parent() {
+            let mut wing_index= 0;
             //Generate lidar_points times raycast measurement for lidar_fov°
             match parent_obj.clone().try_cast::<RigidBody3D>() {
                 Ok(mut robot) => {
-                    godot_print!("Wing Setpoints= {:?}", self.wing_positions);
-                    for i in 0..robot.get_child_count() {
-                        if let Some(child)= robot.get_child(i) {
-                            if let Ok(mut wing)= child.try_cast::<StaticBody3D>() {
-                                let mut wing_angles= wing.get_rotation_degrees();  // Changed from get_global_rotation_degrees()
-                                godot_print!("Wing Name: {:?}", wing.get_name().to_string());
-                                if wing.get_name().to_string() == "WingL".to_string() {
-                                    wing_angles.z= self.wing_positions[0];
-                                    godot_print!("Setpoint Rotation= {:?}", self.wing_positions[0]);
-                                } else {
-                                    wing_angles.z= self.wing_positions[1];
-                                    godot_print!("Setpoint Rotation= {:?}", self.wing_positions[1]);
-                                }
-                                wing.set_rotation_degrees(wing_angles);
-                                //godot_print!("Wing Location= {:?}\n", wing.get_global_position());
-                                godot_print!(" | Theoric {:?} Rotation= {:?}\n", wing.get_name().to_string(), wing_angles);
-                                godot_print!("Real Wing Rotation= {:?}\n", wing.get_global_rotation_degrees());
+                    if let Some(wingL) = robot.find_child("WingL") && let Some(wingR) = robot.find_child("WingR"){
+                        if let Ok(mut wingLBody)= wingL.try_cast::<StaticBody3D>() && let Ok(mut wingRBody)= wingR.try_cast::<StaticBody3D>() {
+                            let mut wingLOrientation= wingLBody.get_rotation_degrees();
+                            let mut wingROrientation= wingRBody.get_rotation_degrees();
+                            let mut commands= self.mixer.apply_command_law(vec![wingLOrientation.z as f64, wingROrientation.z as f64], self.waypoint.to_vec(), delta);
+                            for i in 0..commands.len() {
+                                //godot_print!("Wing Orientation= {}    ->    Raw Command= {}", wingROrientation.z, commands[i]);
+                                //godot_print!("Lower Bound= {} Higher Bound= {}", -self.wing_speed*delta, self.wing_speed*delta);
+                                commands[i]= f64::clamp(commands[i], -self.wing_speed*delta, self.wing_speed*delta);
+                                
                             }
+                            wingLBody.set_rotation_degrees(Vector3::new(wingLOrientation.x, wingLOrientation.y, utils::modulo_180( wingLOrientation.z + commands[0] as f32)));
+                            wingRBody.set_rotation_degrees(Vector3::new(wingROrientation.x, wingROrientation.y, utils::modulo_180( wingROrientation.z + commands[1] as f32)));
+                            let mut wingLOrientation= wingLBody.get_rotation_degrees();
+                            let mut wingROrientation= wingRBody.get_rotation_degrees();
+                            //godot_print!("Safe left wing Command= {}    ->    Expected Next Left Wing Orientation= {}", commands[0], wingROrientation.z);
+                            //godot_print!("Safe right wing Command= {}   ->    Expected Next Right Wing Orientation= {}", commands[1], wingROrientation.z);
                         }
                     }
                     //if let Ok(wing_l) = robot.get_chil
@@ -296,13 +301,10 @@ impl INode3D for AutonomyNode{
                     };
                     //godot_print!("Linear Accel:\n{:?}", godot_linear_accel);
                     //godot_print!("IMU Data:\n{:?}", imu_data);
-                    //Compute the velocities to apply to the robot from the joystick input
-                    //let translation= Vector3 { x: self.motion_command[0]*self.motion_factor, y: 0.0, z: 0.0 };
-                    let relative_rotation= Vector3 { x: 0.0, y: self.motion_command[1]*self.motion_factor, z: 0.0 };
+                    //Compute the velocities to apply to the robot from the joystick input*
                     
                     //Applying the velocity computed from the joystick input
                     //robot.set_linear_velocity(translation);
-                    robot.set_angular_velocity(relative_rotation);
                     angle_offset += robot.get_global_rotation().y as f64;
 
                     for i in 0..self.lidar_points{
@@ -357,9 +359,8 @@ impl INode3D for AutonomyNode{
                         if measurements.len() > 0 {
                             if self.dt >= 1.0 / udp_worker.get_frequency() as f64 {
                                 if self.dt > 1.0 / udp_worker.get_frequency() as f64 *1.15 {
-                                    godot_print!("Send Late\n")
+                                    godot_print!("Send Late\n    Expected Frequency= {} | Elapsed Time= {} |TIME BETWEEN FRAMES= {}", udp_worker.get_frequency(), self.dt, delta);
                                 }
-                                //godot_print!("TRIG => Elapsed Time= {} |TIME BETWEEN FRAMES= {}", self.dt, delta);
                                 self.dt= 0.0;
                                 match udp_worker.get_module().downcast_ref::<UDPChannel>() {
                                     Some(udp) => {
