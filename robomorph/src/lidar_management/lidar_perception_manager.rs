@@ -1,6 +1,6 @@
-use std::{collections::LinkedList, sync::{Arc, Mutex}, time::{self, Instant}};
+use std::sync::{Arc, Mutex};
 
-use crate::{core::{event_management::{Event, Observer}, utils, worker::Module}, lidar_management::{measurements::{self, LidarMap, LidarMeasurements, LidarObject, LidarPoint}, segmentation_algorithms::SegmentationAlgorithm}, positionning::pose::Pose};
+use crate::{core::{event_management::{Event, Observer}, utils, worker::Module}, lidar_management::{measurements::{LidarMap, LidarMeasurements, LidarPoint}, segmentation_algorithms::SegmentationAlgorithm}, positionning::pose::Pose};
 
 pub struct LidarPerceptionManager {
     object_detection_solver: Arc<dyn SegmentationAlgorithm>,
@@ -24,7 +24,7 @@ impl LidarPerceptionManager {
         //Callback for Lidar measurements reception
         let mut obs= Observer::new(Arc::new(Mutex::new(move |lidar_measurements: LidarMeasurements| {
             let mut current_pose= Pose::default();
-            if let Ok(mut pose_observer)= this_cl.clone().pose_observer.try_lock() && let Some(mut pose_obs) = pose_observer.as_mut() {
+            if let Ok(mut pose_observer)= this_cl.clone().pose_observer.try_lock() && let Some(pose_obs) = pose_observer.as_mut() {
                 if let Some(p) = pose_obs.get_incoming_data() {
                     current_pose= p;
                 }

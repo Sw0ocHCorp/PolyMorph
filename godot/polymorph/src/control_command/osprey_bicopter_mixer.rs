@@ -1,5 +1,5 @@
 use godot::global::godot_print;
-use robomorph::{actuators::mixer_model::MixerModel, control::{self, pid::PIDController}, core::utils::{self, modulo_2pi}, positionning::pose::Pose};
+use robomorph::{actuators::mixer_model::MixerModel, control::{self, pid::PIDController}, core::utils::{self}, positionning::pose::Pose};
 
 const WINGL_ANGLE_OFFSET: f64= 90.0;
 const WINGR_ANGLE_OFFSET: f64= -90.0;
@@ -52,17 +52,24 @@ impl MixerModel for OspreyBicopterMixer {
         }
         motion_direction= utils::compute_direction_vector(motion_direction);
         let wing_angle_setpoint= f64::atan2(motion_direction[1], motion_direction[0]).to_degrees();
-        for j in 0..2 {
-            if j == 0{
-                //apply - to the setpoint because the wing is 180 flip around the Y axis
-                self.wings_command[j] = self.wing_pids[j].compute_output_value(-wing_angle_setpoint + WINGL_ANGLE_OFFSET, current_state[j], dt);
-            } else {
-                //godot_print!("Right wing:\n    current angle= {} | setpoint angle= {}\n    angle error= {}", current_state[j], wing_angle_setpoint + WINGR_ANGLE_OFFSET, wing_angle_setpoint + WINGR_ANGLE_OFFSET - current_state[j]);
-                self.wings_command[j] = self.wing_pids[j].compute_output_value(wing_angle_setpoint + WINGR_ANGLE_OFFSET, current_state[j], dt);
+        for j in 0..self.wing_pids.len() + self.thruster_pids.len() {
+            if j < self.wing_pids.len() {
+                if j % 2 == 0{
+                    //apply - to the setpoint because the wing is 180 flip around the Y axis
+                    self.wings_command[j] = self.wing_pids[j].compute_output_value(-wing_angle_setpoint + WINGL_ANGLE_OFFSET, current_state[j], dt);
+                } else {
+                    self.wings_command[j] = self.wing_pids[j].compute_output_value(wing_angle_setpoint + WINGR_ANGLE_OFFSET, current_state[j], dt);
+                }
+                commands.push(self.wings_command[j]);
+            } else if j < self.wing_pids.len() + self.thruster_pids.len() {
+                let dist_error= utils::euclidean_distance(&current_state[2..current_state.len()].to_vec(), &setpoint).abs();
+                godot_print!("Distance error= {:?}", dist_error);
+                self.thrusters_command[j - self.wing_pids.len()]= self.thruster_pids[j - self.wing_pids.len()].compute_output_value_from_error(dist_error, dt);
+                //godot_print!("Integral Error= {:?}", self.thruster_pids[j - self.wing_pids.len()].get_integral_error());
+                commands.push(self.thrusters_command[j - self.wing_pids.len()]);
             }
-            commands.push(self.wings_command[j]);
         }
-        
+        godot_print!("Raw mixer commands= {:?}", commands);
         return commands;
     }
 }

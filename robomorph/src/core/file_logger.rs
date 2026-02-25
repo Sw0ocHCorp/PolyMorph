@@ -12,13 +12,12 @@ pub struct FileLogger {
 
 impl FileLogger {
     pub fn new(folder_path: String) -> Self {
-        match (create_dir(&folder_path)) {
+        match create_dir(&folder_path) {
             Ok(_) => println!("Create Directory"),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists=> println!("Directory already Exist"), 
             Err(e) => println!("Failed to create directory: {}", e)
         }
         let now = Local::now().format("%Y-%m-%d_%H-%M-%S%.f").to_string();
-;
         /*if let Some(idx)= now.find(" +") {
             let _= now.split_off(idx);
             now= now.replace(".", ",").replace(" ", "|").replace(":", "-").replace("-", "_");

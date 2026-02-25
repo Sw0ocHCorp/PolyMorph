@@ -24,7 +24,7 @@ mod test_utils_functions {
         ];
 
         for &v in &tests {
-            println!("{} -> {}", v, utils::modulo_pi(v));
+            println!("{} -> {}", v, utils::modulo_pi(v as f32));
         }
     }
 }
@@ -123,6 +123,8 @@ mod test_com_interface {
 mod test_serialization_deserialization {
     use crate::{core::messages::{self, Translatable}, lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
 
+    
+
 
 
     
@@ -203,6 +205,8 @@ mod test_serialization_deserialization {
 
 mod test_logs {
     use crate::core::file_logger::FileLogger;
+
+    
 
  
     #[test]

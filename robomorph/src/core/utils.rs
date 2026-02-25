@@ -1,6 +1,5 @@
 use std::f64::consts::PI;
 
-use faer::{Col, col};
 
 use crate::positionning::pose::GPSData;
 
@@ -121,9 +120,9 @@ pub fn compute_vec_norm(vector: Vec<f64>) -> f64 {
     return f64::sqrt(cumul);
 }
 
-pub fn compute_direction_vector(rawVec: [f64; 3]) -> [f64; 3] {
-    let norm= compute_vec_norm(rawVec.to_vec());
-    let mut dir_vec= rawVec;
+pub fn compute_direction_vector(raw_vec: [f64; 3]) -> [f64; 3] {
+    let norm= compute_vec_norm(raw_vec.to_vec());
+    let mut dir_vec= raw_vec;
     for i in 0..dir_vec.len() {
         dir_vec[i] /= norm;
     }

@@ -1,9 +1,8 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}, time::{self, Instant, SystemTime}};
+use std::sync::Arc;
 
-use godot::{classes::{Engine, InputEvent, InputEventJoypadButton, InputEventJoypadMotion, Performance, PhysicsRayQueryParameters3D, RigidBody3D, StaticBody3D, editor_vcs_interface::ChangeType}, global::{JoyAxis, JoyButton, atan2, cos, sin}, prelude::*};
+use godot::{classes::{InputEvent, InputEventJoypadButton, InputEventJoypadMotion, PhysicsRayQueryParameters3D, RigidBody3D, StaticBody3D}, global::{JoyAxis, JoyButton, cos, sin}, prelude::*};
 use num_quaternion::UQ64;
-use ordered_float::OrderedFloat;
-use robomorph::{actuators::mixer_model::MixerModel, communication::UDPChannel, core::{messages::{self, DataChunk, SOF}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData, Pose}};
+use robomorph::{actuators::mixer_model::MixerModel, communication::UDPChannel, core::{messages::{self}, utils, worker::Worker}, lidar_management::measurements::LidarMeasurements, positionning::pose::{GPSData, IMUData, Pose}};
 
 use crate::control_command::osprey_bicopter_mixer::OspreyBicopterMixer;
 
@@ -29,7 +28,10 @@ pub struct AutonomyNode {
     dt: f64,
     gps_dt: f64,
     wing_speed: f64,
+    max_thrust: f64,
     waypoint: [f64; 3],
+    wingl_vel: [f32;3],
+    wingr_vel: [f32;3],
     mixer: OspreyBicopterMixer
 }
 #[godot_api]
@@ -88,7 +90,7 @@ impl INode3D for AutonomyNode{
         let mut max_wing_angle_error= 90.0;
         let mut wing_angle_threshold= 1.0;
         let mut thruster_pid_factors= [1.0, 0.0, 0.0];
-        let mut max_location_error= 10.0;
+        let mut max_thrust= 1.15;
         let mut dist_threshold= 0.5;
         if self.base().has_meta("wingPIDFactors") && let Ok(factors) = self.base().get_meta("wingPIDFactors").try_to::<Vector3>() {
             wing_pid_factors= [factors.x as f64, factors.y as f64, factors.z as f64];
@@ -133,12 +135,12 @@ impl INode3D for AutonomyNode{
             self.wing_speed= 90.0;
         }
 
-        if self.base().has_meta("maxLocationError") && let Ok(location_error) = self.base().get_meta("maxLocationError").try_to::<f32>() {
-            max_location_error= location_error as f64;
-            godot_print!("Loading maxWingAngleError metadata succesfully, It's value is= {}m", max_location_error);
+        if self.base().has_meta("maxThrust") && let Ok(max_thrust) = self.base().get_meta("maxThrust").try_to::<f32>() {
+            self.max_thrust= max_thrust as f64;
+            godot_print!("Loading maxThrust metadata succesfully, It's value is= {}m/s", self.max_thrust);
         }
         else {
-            godot_print!("/!\\ ERROR: unknown maxWingAngleError metadata");
+            godot_print!("/!\\ ERROR: unknown maxThrust metadata");
         }
 
         if self.base().has_meta("distThreshold") && let Ok(dist_thresh) = self.base().get_meta("distThreshold").try_to::<f32>() {
@@ -165,7 +167,7 @@ impl INode3D for AutonomyNode{
         let init_pose= Pose::new(GPSData{latitude: 0.0, longitude: 0.0}, [0.0, 0.0, 0.0], 
                                                         UQ64::one(), 
                                                         [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-        self.mixer = OspreyBicopterMixer::new(init_pose, wing_pid_factors, max_wing_angle_error, wing_angle_threshold, thruster_pid_factors, max_location_error, dist_threshold);
+        self.mixer = OspreyBicopterMixer::new(init_pose, wing_pid_factors, max_wing_angle_error, wing_angle_threshold, thruster_pid_factors, max_thrust, dist_threshold);
         self.udp_worker= Some(Worker::new(udp, "UDP_WORKER", self.data_fps as i64, false));
         self.debug_worker= Some(Worker::new(udp_debug, "DEBUG_UDP_WORKER", self.data_fps as i64, false));
 
@@ -230,36 +232,54 @@ impl INode3D for AutonomyNode{
         let mut measurements= LidarMeasurements::new(true);
         let mut imu_data= IMUData::new();
         let mut angle_offset= self.lidar_angle_offset;
-        let mut true_orientation:[f32; 3]= [0.0, 0.0, 0.0];
         //IF this node had a parent
-        if let Some(mut parent_obj) = self.base().get_parent() {
-            let mut wing_index= 0;
+        if let Some(parent_obj) = self.base().get_parent() {
             //Generate lidar_points times raycast measurement for lidar_fov°
             match parent_obj.clone().try_cast::<RigidBody3D>() {
-                Ok(mut robot) => {
-                    if let Some(wingL) = robot.find_child("WingL") && let Some(wingR) = robot.find_child("WingR"){
-                        if let Ok(mut wingLBody)= wingL.try_cast::<StaticBody3D>() && let Ok(mut wingRBody)= wingR.try_cast::<StaticBody3D>() {
-                            let mut wingLOrientation= wingLBody.get_rotation_degrees();
-                            let mut wingROrientation= wingRBody.get_rotation_degrees();
-                            let mut commands= self.mixer.apply_command_law(vec![wingLOrientation.z as f64, wingROrientation.z as f64], self.waypoint.to_vec(), delta);
+                Ok(robot) => {
+                    if let Some(wingl) = robot.find_child("WingL") && let Some(wingr) = robot.find_child("WingR"){
+                        if let Ok(mut wingl_body)= wingl.try_cast::<RigidBody3D>() && let Ok(mut wingr_body)= wingr.try_cast::<RigidBody3D>() {
+                            let wingl_orientation= wingl_body.get_rotation_degrees();
+                            let wingr_orientation= wingr_body.get_rotation_degrees();
+                            let wing_lin_speeds= vec![wingl_body.get_linear_velocity().length(),  wingr_body.get_linear_velocity().length()];
+                            let robot_loc= robot.get_global_position();
+                            let mut commands= self.mixer.apply_command_law(vec![wingl_orientation.z as f64, wingr_orientation.z as f64, robot_loc.x as f64, robot_loc.y as f64, robot_loc.z as f64] , self.waypoint.to_vec(), delta);
                             for i in 0..commands.len() {
-                                //godot_print!("Wing Orientation= {}    ->    Raw Command= {}", wingROrientation.z, commands[i]);
+                                //godot_print!("Wing Orientation= {}    ->    Raw Command= {}", wingr_orientation.z, commands[i]);
                                 //godot_print!("Lower Bound= {} Higher Bound= {}", -self.wing_speed*delta, self.wing_speed*delta);
-                                commands[i]= f64::clamp(commands[i], -self.wing_speed*delta, self.wing_speed*delta);
+                                if i < 2 {
+                                    commands[i]= f64::clamp(commands[i], -self.wing_speed*delta, self.wing_speed*delta);
+                                } else {
+                                    //Compute the acceleration required to reach the given speed (clamp it to ensure staying under / at max accel / deccel)
+                                    let delta_v= f64::clamp((commands[i] - wing_lin_speeds[i-2] as f64)*delta, -self.max_thrust*delta, self.max_thrust*delta);
+                                    //godot_print!("Delta V to reach waypoint= {}", delta_v);
+                                    //Update the new speed to apply to the wing
+                                    commands[i] = delta_v;
+                                    godot_print!("Next delta V= {}", commands[i]);
+                                }
+                                
                                 
                             }
-                            wingLBody.set_rotation_degrees(Vector3::new(wingLOrientation.x, wingLOrientation.y, utils::modulo_180( wingLOrientation.z + commands[0] as f32)));
-                            wingRBody.set_rotation_degrees(Vector3::new(wingROrientation.x, wingROrientation.y, utils::modulo_180( wingROrientation.z + commands[1] as f32)));
-                            let mut wingLOrientation= wingLBody.get_rotation_degrees();
-                            let mut wingROrientation= wingRBody.get_rotation_degrees();
-                            //godot_print!("Safe left wing Command= {}    ->    Expected Next Left Wing Orientation= {}", commands[0], wingROrientation.z);
-                            //godot_print!("Safe right wing Command= {}   ->    Expected Next Right Wing Orientation= {}", commands[1], wingROrientation.z);
+                            wingl_body.set_rotation_degrees(Vector3::new(wingl_orientation.x, wingl_orientation.y, utils::modulo_180( wingl_orientation.z + commands[0] as f32)));
+                            wingr_body.set_rotation_degrees(Vector3::new(wingr_orientation.x, wingr_orientation.y, utils::modulo_180( wingr_orientation.z + commands[1] as f32)));
+                            let wingl_orientation= wingl_body.get_rotation();
+                            let wingr_orientation= wingr_body.get_rotation();
+                            self.wingl_vel[0]= f32::clamp(self.wingl_vel[0] + f32::sin(wingl_orientation.z)*commands[2] as f32, 0.0, self.max_thrust as f32);
+                            self.wingl_vel[1]= f32::clamp(self.wingl_vel[1] + f32::cos(wingl_orientation.z)*commands[2] as f32, 0.0, self.max_thrust as f32);
+                            self.wingl_vel[2]= 0.0;
+                            self.wingr_vel[0]= f32::clamp(self.wingr_vel[0] + f32::sin(wingr_orientation.z)*commands[3] as f32, 0.0, self.max_thrust as f32);
+                            self.wingr_vel[1]= f32::clamp(self.wingr_vel[1] + f32::cos(wingr_orientation.z)*commands[3] as f32, 0.0, self.max_thrust as f32);
+                            self.wingr_vel[2]= 0.0;
+                            godot_print!("Theoric Next Left Wing velocity= {:?}", self.wingl_vel);
+                            godot_print!("Theoric Next Right Wing velocity= {:?}", self.wingr_vel);
+                            wingl_body.set_linear_velocity(Vector3 { x: self.wingl_vel[0], y: self.wingl_vel[1], z: self.wingl_vel[2] });
+                            wingr_body.set_linear_velocity(Vector3 { x: self.wingr_vel[0], y: self.wingr_vel[1], z: self.wingr_vel[2] });
+                            let wing_lin_speeds= vec![wingl_body.get_linear_velocity().length(),  wingr_body.get_linear_velocity().length()];
+                            godot_print!("Real New Wings velocities= {:?}", wing_lin_speeds);
                         }
                     }
                     //if let Ok(wing_l) = robot.get_chil
                     let rob_orientation= robot.get_global_rotation();
-                    
-                    true_orientation= [rob_orientation.x, rob_orientation.z, rob_orientation.y];
                     // 1. Calculate Linear Acceleration in Godot World Space
                     // We add gravity because an IMU at rest measures the "Normal Force" pushing UP.
                     let mut godot_linear_accel = (robot.get_linear_velocity() - self.last_linear_vel) / (delta as f32) - GRAVITY;
@@ -321,7 +341,7 @@ impl INode3D for AutonomyNode{
                                     //Get the position of the parent
                                     let origin= parent.get_global_position();
                                     // generate a raycast of 50m with the specific angle
-                                    let mut raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: 50.0*cos(utils::modulo_pi_f64(-(angle + angle_offset))) as f32, y: 0.5, z: 50.0*sin(utils::modulo_pi_f64(-(angle+ angle_offset))) as f32});
+                                    let raycast = PhysicsRayQueryParameters3D::create(origin, origin + Vector3{x: 50.0*cos(utils::modulo_pi_f64(-(angle + angle_offset))) as f32, y: 0.5, z: 50.0*sin(utils::modulo_pi_f64(-(angle+ angle_offset))) as f32});
                                     //Get the collision of the raycast and Rigidbodies of in the scene
                                     let collision= space_state.intersect_ray(raycast.as_ref());
                                     //MATCH: there is a collider position? (means there is a collision with a RigidBody?)
@@ -366,11 +386,11 @@ impl INode3D for AutonomyNode{
                                     Some(udp) => {
                                         let gps_data= utils::local_to_global_frame(ORIGIN_GPS_DATA, robot.get_global_position().x as f64, robot.get_global_position().y as f64);
                                         if self.gps_dt >= 1.0 / self.gps_frequency as f64 {
-                                            let mut gps_frame= messages::convert_to_frame(vec![Box::new(gps_data)]);
+                                            let gps_frame= messages::convert_to_frame(vec![Box::new(gps_data)]);
                                             udp.publish_message(gps_frame);
                                             self.gps_dt= 0.0;
                                         }
-                                        let mut imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
+                                        let imu_frame=messages::convert_to_frame(vec![Box::new(imu_data)]);
                                         //debug_udp= rob_orientation.to_string();
                                         match debug_udp.get_module().downcast_ref::<UDPChannel>() {
                                             Some(udp_debug)=>{udp_debug.publish_message(Vec::from(rob_orientation.to_string()));}

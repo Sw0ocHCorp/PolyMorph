@@ -1,8 +1,6 @@
-use std::sync::{Arc, Mutex};
 
 use faer::{Col, Mat, prelude::Solve};
 
-use crate::{core::event_management::{Event, Observer}, lidar_management::measurements};
 
 pub const KAPPA: f64= 0.0;
 
@@ -234,7 +232,7 @@ pub trait UnscentedKalmanFilter {
             sigma_points[i]= Self::apply_transition_function(&sigma_points[i], &input_measurements, delta_time)
         }
         //Get the mean points of the transformed state distribution
-        let mut predicted_state= self.compute_mean_points(sigma_points.clone(), 0.55);
+        let predicted_state= self.compute_mean_points(sigma_points.clone(), 0.55);
         //Update the state covariance, based on the predicted state determine in the predict step
         let state_cov= self.update_state_covariance_from_predict(&predicted_state, &sigma_points, state_covariance, 0.55);
         
@@ -250,7 +248,7 @@ pub trait UnscentedKalmanFilter {
         for i in 1..sigma_points.len() {
             let weight= (1.0-w0)/(sigma_points.len() as f64 -1.0);
             //Compute the "distance" between the sigma points and the center of the distribution
-            let diff= (&sigma_points[i] - mean_point);
+            let diff= &sigma_points[i] - mean_point;
             state_cov += weight * &diff.as_mat()*&diff.as_mat().transpose();
         }
         state_cov += state_process_noise;
@@ -264,7 +262,7 @@ pub trait UnscentedKalmanFilter {
         let spread_factor= self.get_spread_factor();
         let scale_factor= spread_factor.powf(2.0)*(nrows + KAPPA) - nrows;
         let scale= nrows + scale_factor;
-        let mut base_sigma_points= Self::generate_sigma_points(&predicted_state, scale, &state_covariance);
+        let base_sigma_points= Self::generate_sigma_points(&predicted_state, scale, &state_covariance);
         let mut transformed_sigma_points= Vec::new();
         for i in 0..base_sigma_points.len() {
             //The transformed sigma point represent the theoric ref sensor measurements at the given sigma point state
@@ -293,12 +291,7 @@ pub trait UnscentedKalmanFilter {
     }
 
     fn compute_cross_innov_covariances(&self, base_sigma_points: &Vec<Col<f64>>, transformed_sigma_points: &Vec<Col<f64>>, predicted_state: &Col<f64>, measured_state: &Col<f64>, state_covariance: &Mat<f64>, w0: f64) -> (Mat<f64>, Mat<f64>) {
-        let nrows= state_covariance.nrows() as f64;
-        let spread_factor= self.get_spread_factor();
-        let prior_knowledge= self.get_prior_knowledge();
         let measurements_noise= self.get_measurements_noise();
-        let scale_factor= spread_factor.powf(2.0)*(nrows + KAPPA) - nrows;
-        let scale= nrows + scale_factor;
         //Cross Covariance:
         //  Global uncertainties (in the state space and in the ref sensor measurements state)
         let mut cross_covariance= Mat::<f64>::zeros(state_covariance.nrows(), measured_state.nrows());
@@ -338,7 +331,6 @@ pub trait UnscentedKalmanFilter {
     }
 
     fn compute_mean_points(&self, sigma_points: Vec<Col<f64>>, w0: f64) -> Col<f64> {
-        let nrows= sigma_points[0].nrows() as f64;
         let mut mean_point= w0 * &sigma_points[0];
         //Compute the mean point / state
         for i in 1..sigma_points.len() {

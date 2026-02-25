@@ -82,10 +82,10 @@ metadata/wingPIDFactors = Vector3(0.1, 0, 0)
 metadata/wingMaxRotationSpeed = 100.0
 metadata/maxWingAngleError = 45.0
 metadata/wingAngleThreshold = 1.0
-metadata/thrusterPIDFactors = Vector3(1, 0, 0)
-metadata/maxLocationError = 5.0
+metadata/thrusterPIDFactors = Vector3(1, 1, 0)
+metadata/maxThrust = 1.15
 metadata/distThreshold = 0.5
-metadata/wayPoint = Vector3(1, 0, 0)
+metadata/wayPoint = Vector3(0, 1, 0)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(-1.3113417e-08, 0.3, 1.3113417e-08, 0, -1.3113417e-08, 0.3, 0.3, 1.3113417e-08, 5.7320567e-16, 0.0003733635, 0, 0)
@@ -114,13 +114,8 @@ transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70
 transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70499986, 1.5, 0)
 current = true
 
-[node name="WingL" type="StaticBody3D" parent="Robot"]
+[node name="WingL" type="RigidBody3D" parent="Robot"]
 transform = Transform3D(-0.99999964, 0, 1.5099575e-07, 0, 1, 0, -1.5099575e-07, 0, -0.99999964, 0, 0.75, -1.4999999)
-axis_lock_linear_x = true
-axis_lock_linear_y = true
-axis_lock_linear_z = true
-axis_lock_angular_x = true
-axis_lock_angular_y = true
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingL"]
 transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
@@ -129,13 +124,13 @@ mesh = ExtResource("2_snh11")
 [node name="ThrusterL" type="Node3D" parent="Robot/WingL"]
 transform = Transform3D(0.9999998, 0, 7.1054274e-15, 0, 1, 0, -7.1054274e-15, 0, 0.9999998, 0, 0.955, 1.735)
 
-[node name="WingR" type="StaticBody3D" parent="Robot"]
+[node name="PinJoint3D" type="HingeJoint3D" parent="Robot/WingL"]
+node_a = NodePath("..")
+node_b = NodePath("../..")
+exclude_nodes_from_collision = false
+
+[node name="WingR" type="RigidBody3D" parent="Robot"]
 transform = Transform3D(0.99999934, 0, 0, 0, 1, 0, 0, 0, 0.99999934, 0, 0.75, 1.5)
-axis_lock_linear_x = true
-axis_lock_linear_y = true
-axis_lock_linear_z = true
-axis_lock_angular_x = true
-axis_lock_angular_y = true
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingR"]
 transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
@@ -143,6 +138,12 @@ mesh = ExtResource("3_rh7ek")
 
 [node name="ThrusterR" type="Node3D" parent="Robot/WingR"]
 transform = Transform3D(0.9999998, 0, 7.1054274e-15, 0, 1, 0, -7.1054274e-15, 0, 0.9999998, 0, 0.955, 1.735)
+
+[node name="PinJoint3D" type="HingeJoint3D" parent="Robot/WingR"]
+visible = false
+node_a = NodePath("..")
+node_b = NodePath("../..")
+exclude_nodes_from_collision = false
 
 [node name="StaticBody3D" type="StaticBody3D" parent="."]
 

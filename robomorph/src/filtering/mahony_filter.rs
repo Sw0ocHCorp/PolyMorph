@@ -1,4 +1,4 @@
-use num_quaternion::{Q32, Quaternion, UnitQuaternion};
+use num_quaternion::{Quaternion, UnitQuaternion};
 
 use crate::{control::pid::PIDController, core::utils, positionning::pose::IMUData};
 

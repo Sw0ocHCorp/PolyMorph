@@ -39,6 +39,10 @@ impl PIDController {
     pub fn get_min_error_threshold(&self) -> f64 {
         return self.min_error_threshold;
     }
+
+    pub fn get_integral_error(&self) -> f64 {
+        return self.integral_error;
+    }
 }
 
 pub fn copy(pid: &PIDController) -> PIDController {

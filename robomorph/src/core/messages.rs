@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::{lidar_management::measurements::LidarMeasurements, positionning::pose::{IMUData, Pose}};
+use crate::{lidar_management::measurements::LidarMeasurements, positionning::pose::IMUData};
 
 #[derive(Clone)]
 pub enum ParsingState {
