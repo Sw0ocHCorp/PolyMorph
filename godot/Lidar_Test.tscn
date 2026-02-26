@@ -85,7 +85,7 @@ metadata/wingAngleThreshold = 1.0
 metadata/thrusterPIDFactors = Vector3(1, 1, 0)
 metadata/maxThrust = 1.15
 metadata/distThreshold = 0.5
-metadata/wayPoint = Vector3(0, 1, 0)
+metadata/wayPoint = Vector3(1, 1, 0)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot"]
 transform = Transform3D(-1.3113417e-08, 0.3, 1.3113417e-08, 0, -1.3113417e-08, 0.3, 0.3, 1.3113417e-08, 5.7320567e-16, 0.0003733635, 0, 0)
@@ -115,7 +115,7 @@ transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 0.70
 current = true
 
 [node name="WingL" type="RigidBody3D" parent="Robot"]
-transform = Transform3D(-0.99999964, 0, 1.5099575e-07, 0, 1, 0, -1.5099575e-07, 0, -0.99999964, 0, 0.75, -1.4999999)
+transform = Transform3D(-0.99999964, 0, 1.5099575e-07, 0, 1, 0, -1.5099575e-07, 0, -0.99999964, 0.149, 0.75, -1.5)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingL"]
 transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
@@ -130,7 +130,7 @@ node_b = NodePath("../..")
 exclude_nodes_from_collision = false
 
 [node name="WingR" type="RigidBody3D" parent="Robot"]
-transform = Transform3D(0.99999934, 0, 0, 0, 1, 0, 0, 0, 0.99999934, 0, 0.75, 1.5)
+transform = Transform3D(0.99999934, 0, 0, 0, 1, 0, 0, 0, 0.99999934, 0.149, 0.75, 1.5)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Robot/WingR"]
 transform = Transform3D(-1.3113416e-08, 0.29999998, 0, -0.29999998, -1.3113416e-08, 0, 0, 0, 0.29999995, 0, 0, 0)
