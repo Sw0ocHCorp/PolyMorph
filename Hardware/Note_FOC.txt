@@ -1,0 +1,63 @@
+An FOC Controller is composed of:
+	A microcontroller that run FOC control algorithm
+	A Gate Driver, representing the interface between the microcontroller (with low voltage / current) and the motor, drives by power MOSFETs(high voltage / current), used as power switch to rotate motors
+
+	What is a Gate Driver:
+		A Gate Driver is the interface between the microcontroller and the power transstor that transmit current in the hardware motor.
+		It takes the PWM signal output of the microcontroller, an turns it into powerfull voltage and current pushed in the hardware motors.
+		Params of the Gate Driver:
+			- Drivers Number= 
+				The amount of signal that the chip can handle. 1 driver / signal.
+				For an FOC controller, the chip needs to include 3 drivers because a BLDC are composed of 3 phases
+			- Maximum Operating Voltage= 
+				The maximum operating voltage (VCC/PVDD) is the Max power supply that the driver can handle
+			- Sink / Drain Peak drive current (Output current)
+				The max output current that can deliver the gate driver to the power MOSFET (by the gate pin)
+			- Dead-time:
+				The minimum amount of time between 2 MOSFET switch to prevent errors on the FOC control algrithm (like simultaneous switching commands)
+			- Protection Features:
+				Under Voltage Lockout 	-> Shutdown motors(turn off MOSFET) if too low voltage detected
+				Over-current Protection -> Shutdown motors(turn off MOSFET) if too high current detected 
+	What is a Power MOSFET:
+		The power MOSFET is the controllable switch used to power and rotate the motor
+		Params of the MOSFET:	
+			- Type of channel= 
+				
+			- VDSS / VDS= 
+				The max voltage the MOSFET can block when it' off without causing damage to itself
+				/!\ If it's too low, switching the MOSFET can causing damage or destroy the MOSFET (To be sure, take 2*VBAT)
+			- Continuous drain current=
+				The max current that con be apply to the drain(device) without overheating the MOSFET
+				/!\ The values on datasheet assume ideal condition. Always choosing 2*Imax motor 
+			- Static Drain to Source resistance= 
+				The internal resistance of the MOSFET. 
+				It allow to compute the conductance loss(I²R)
+				/!\ Low resitance means better efficiency 
+			- Total Gate Charge=
+				Total amount of energy required to turn on the MOSFET (because switch a MOSFET is like (dis)charging a capacitor)
+				/!\ To size the Total gate charge of the motor, we need to use this formula
+					Ig= Qg*tsw		-> With Ig: the gate drive current
+									tsw: the desired switching MOSFET time (1/tsw can/should be smaller than the period of the motor control algorithm)
+			- Thermal dissipation= 
+				A
+	Why using shunt résistors?
+		The FOC controller manipulate the stator's magnetic field to rotate the rotor. It require to know precisely the orientation of the position of the rotor but also the current consume by the motor at each step.
+		Because the microcontroller can't measure that directly, a shunt resistor is needed.
+		This resistor  allow us to know the current consume by the motor thanks to the Ohm's Law: U= RI		=> U= ADC reference voltage | R= the shunt resistor value (0.5 to 10mΩ) | I= the current consume by the motor
+		/!\ To measure this current, an ADC is required. One shunt resistor / motor phase is needed
+		=> To size the shunt resistor we need to know:
+			- The ADC voltage to determine the voltage amplitude that can be used to track alternating current variation (Vswing= (Vadc/2) - margin)
+			- The max peak current of the motor
+			- The potential amplifier gain of the gate driver
+			With thoses values, the formula to size the resistor will be the Following:
+				Rshunt= Vswing / Impeak*Gamp
+	Why a DC Link Capacitors?
+		To control motor, the microcontroller send command to the gate driver to swith the MOSFET at 20-40kHz. Connecting the battery to the board, switch it fastly will introduce voltage spikes that can damages / destroy components
+		Params of the Capacitor:
+			- Rate Voltage= 50V: The max voltage that can the capacitor handle
+			- B
+			- C
+		/!\ Prefer using multiple capacitors instead of one big capacitor to minimize the heat produced by the capacitor. The total heat produced by multiple is (1/N) with N= the number of capacitors.
+	Why using Magnetic Rotation Sensor:
+
+	How to perform Sensorless FOC:

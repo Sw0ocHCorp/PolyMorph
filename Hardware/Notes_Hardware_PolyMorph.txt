@@ -1,12 +1,42 @@
-Condensateurs connectés à l'ICM42688:
-Condensateur de découplage, but= assurer une alimentation stable du capteur. Permet de tanker les potentiels burst de courant (burst de courant= décharge l'énergie stockée dans le condo
-Capacité 100nF connectée à VDD(C1) => Gestion du bruit relatif à la fréquence d'échantillonnage (car petite valeur)
-Capacité 2.2uF connectée à VDD(C2) => Gestion du bruit à basse fréquence(car valeur plus importante (car valeur plus petite)
-Capacité 10nF connectée à VDDIO(C3) => VDDIO: Alimente le buffer des mesures (IO)
+=> Main FC Board (Positioning sensors, Communications with Companion board and Motor controllers
+	Capacitors connected to the ICM42688:
+		Decoupling capacitor, purpose = ensure a stable power supply for the sensor. It helps handle potential current bursts (current burst = discharge of the energy stored in the capacitor).
+			- 100 nF capacitor connected to VDD (C1) → Noise management related to the sampling frequency (because of the small value).
+			- 2.2 µF capacitor connected to VDD (C2) → Low-frequency noise management (because of the larger value).
+			- 10 nF capacitor connected to VDDIO (C3) → VDDIO powers the measurement buffer (I/O).
 
-/!\ATTENTION
+=> Motor controller board (FOC controller)
+	Using STM32G474RET6 microcontroller:
+		- 170MHz= High speed MCU to be able to run the control loop quickly enough
+		- HRTIM & Advanced motor control timers
+		- 
+	Using DRV8305NPHPR gate driver
+		- Integrated 3 Drivers: really usefull because 1 driver / phase of the motor
+		- 1.25 / 1A Peak drive current: The max current used to switch the MOSFET
+		- Programmable dead-time control: 
+		- The maximum operating voltage: 
+	Using BSC028N06NS power MOSFET
+		- VDS= 80V: >> 2*VBAT with VBAT= 20V. It ensure no damages on the MOSFET if there are Voltage Spikes
+		- Id= 100A: BLDC motors can consume lot of current (within short time)
+		- Rds(on)= 2.8mΩ: small resistor will reduce the conductance loss of the MOSFET (I²Rds(on)) 
+		- Qg= 37nc: Small amount of energy allow us to choose the tsw by reducing the Ig deliver by 
+			the gate drive to reduce EMI
+	Using 1mΩ shunt résistors:
+		- Vswing= 1.5V: Vadc of the STM32G474RET6 is 3.3V -> Vswing= (3.33/2)-0.15 ~= 1.5V with ~0.15V margin relative to Vadc
+		- Ipeak= 75A: Ipeak needs to be lower than Id to be far from the Hardware limitation. 75A will be enough because for a AUV, there are high Amps consumptions, in short times
+		- Gamp=20: The Gamp needs to be "low" to keep a good resolution of measure. This will increase the efficiency of the controller(especially for precise control task or control task with reduction factor).
+				The Gamp cannot be too 
+	Using Voltage Spike safety with TVS diode and Bulk Capacitance:
+	
+	Using LMR33620BDDAR buck converter chip:
 
+	Using AS5048A rotation magnetic sensor:
 
-POINTS A VALIDER AVANT DE COMMANDER LA BOARD
--   Checker l'utilité des Condo de découplage pins VDD ET VDDIO du BMP388
--   Regarder la spec I2C pour s'assurer des max 1000ns pour atteindre 0.7VDD
+=> General:
+	Program & Debug the STM32G474RET6:
+
+/!\ WARNING
+
+POINTS TO VALIDATE BEFORE ORDERING THE BOARD
+Check the usefulness of the decoupling capacitors on the VDD and VDDIO pins of the BMP388
+Review the I2C specification to ensure the maximum 1000 ns to reach 0.7 × VDD

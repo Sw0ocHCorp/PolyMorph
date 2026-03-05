@@ -1,0 +1,50 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "705617bd-94d5-43da-97b2-69d24c388b00")
+	(paper "A4")
+	(lib_symbols)
+	(sheet
+		(at 60.96 37.846)
+		(size 57.404 56.896)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "58b09928-db02-4797-82ae-a0f696fcbe6a")
+		(property "Sheetname" "FOC BLDC Controller"
+			(at 60.96 37.1344 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "foc_bldc_controller.kicad_sch"
+			(at 60.96 95.3266 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "PolyMorphFC_V0"
+				(path "/7e5fee39-d350-415a-bc4f-bc33760fe376/c7ea25d8-24e1-4992-bc21-ff68557ccd42"
+					(page "4")
+				)
+			)
+		)
+	)
+)

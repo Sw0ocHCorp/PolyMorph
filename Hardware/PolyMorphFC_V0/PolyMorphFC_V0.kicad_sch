@@ -1846,8 +1846,8 @@
 		)
 	)
 	(sheet
-		(at 32.512 149.606)
-		(size 71.628 37.084)
+		(at 20.32 21.082)
+		(size 33.528 37.084)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -1861,8 +1861,8 @@
 			(color 0 0 0 0.0000)
 		)
 		(uuid "769c5c9b-86ab-4b79-9b2f-b3d872697b07")
-		(property "Sheetname" "Positionig Region"
-			(at 32.512 148.8944 0)
+		(property "Sheetname" "Positioning Region"
+			(at 20.32 20.3704 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1871,12 +1871,112 @@
 			)
 		)
 		(property "Sheetfile" "positioning_region.kicad_sch"
-			(at 32.512 187.2746 0)
+			(at 20.32 58.7506 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 				(justify left top)
+			)
+		)
+		(pin "BARO_INT" input
+			(at 53.848 45.466 0)
+			(uuid "783207b5-cd2c-44cf-9274-93e8d938c111")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "IMU_CS" input
+			(at 53.848 39.116 0)
+			(uuid "e6cf3b79-90fe-4943-af93-0e8e13219cd4")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "IMU_INT" input
+			(at 53.848 50.546 0)
+			(uuid "de8ba10d-7893-4f4a-8984-4271ca11b94b")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "IMU_MISO" input
+			(at 53.848 34.036 0)
+			(uuid "3dbef560-39c6-4428-9f7a-40d5b5ac5854")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "IMU_MOSI" input
+			(at 53.848 31.496 0)
+			(uuid "16b98ac2-1b2d-45d8-aec0-7cdd534a5004")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "IMU_SCK" input
+			(at 53.848 36.576 0)
+			(uuid "6d8bd926-efe0-40ee-b9ee-13fdf97f6bd9")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MAG_DT_RDY" input
+			(at 53.848 48.006 0)
+			(uuid "cd222573-0f82-4612-8a5e-88e32b6a9533")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MAG_RST" input
+			(at 53.848 55.626 0)
+			(uuid "6edc9e45-b659-47a7-90fb-6cfbdafd76cb")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "POS_SCL" input
+			(at 53.848 25.146 0)
+			(uuid "2854f72e-a41b-4ef4-98e4-2261f506550d")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "POS_SDA" input
+			(at 53.848 22.606 0)
+			(uuid "86b0276d-60a1-4b09-bac7-c979feb59034")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 		(instances
