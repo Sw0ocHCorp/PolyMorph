@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "probe-rs-debug",
+      "request": "launch",
+      "name": "Debug STM32",
+      "preLaunchTask": "cargo build",
+      "cwd": "${workspaceFolder}",
+      "connectUnderReset": true,
+      "chip": "STM32L476RG",
+      "flashingConfig": {
+        "flashingEnabled": true,
+        "resetAfterFlashing": true,
+        "haltAfterReset": true
+      },
+      "coreConfigs": [
+        {
+          "coreIndex": 0,
+          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/polymorph_embedded"
+        }
+      ],
+      "env": {
+        "DEFMT_LOG": "info"
+      },
+      "consoleLogLevel": "Info"
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "cppdbg",
+      "request": "launch",
+      "args": [],
+      "stopAtEntry": false,
+      "externalConsole": true,
+      "cwd": "c:/Users/nclsr/OneDrive/Bureau/PolyMorph/PolyMorph/polymorph_embedded",
+      "program": "c:/Users/nclsr/OneDrive/Bureau/PolyMorph/PolyMorph/polymorph_embedded/build/Debug/outDebug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

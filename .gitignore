@@ -19,3 +19,5 @@ controller/target/
 companion/Logs/
 
 robomorph/Logs/
+
+polymorph_embedded/target/
