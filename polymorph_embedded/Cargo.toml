@@ -3,11 +3,12 @@ name = "polymorph_embedded"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
+[lib]
 name = "polymorph_embedded"
 test = false
 
 [dependencies]
+embassy-sync = "0.7.2"
 embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
     "arch-cortex-m",
     "executor-thread",

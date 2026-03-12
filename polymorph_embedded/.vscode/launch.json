@@ -17,7 +17,7 @@
       "coreConfigs": [
         {
           "coreIndex": 0,
-          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/polymorph_embedded"
+          "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/examples/embedded_unit_test"
         }
       ],
       "env": {
