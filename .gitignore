@@ -21,3 +21,5 @@ companion/Logs/
 robomorph/Logs/
 
 polymorph_embedded/target/
+
+backup/

@@ -1,47 +1,88 @@
 #![no_std]
 #![no_main]
 
-use defmt::println;
-use defmt_rtt as _; use embassy_stm32::{Peri, gpio::{Level, Output, Speed}, peripherals::PA3};
-// Global logger
-use panic_probe as _;
-use polymorph_embedded::embed_core::{event_management::EmbeddedObserver, execution::{EmbeddedModule, EmbeddedWorker}, polyvec::PolyVec}; // Panic handlers
-use embassy_time::{Instant, Timer};
+use core::cell::RefCell;
 
-struct DummyModule<'a> {
+use defmt::{info, println};
+use defmt_rtt as _; use embassy_stm32::{Peri, bind_interrupts, gpio::{Level, Output, Speed}, mode::{Async, Blocking, Mode}, pac::Interrupt::{UART4, UART5}, usart::{Config, InterruptHandler, Uart}};
+// Global logger
+use panic_probe as _; // Panic handlers
+use embassy_time::{Instant, Timer};
+use embassy_stm32::dma;
+use polymorph_embedded::embed_core::{event_data::EventData, execution::{EmbeddedModule, EmbeddedWorker}, orchestrator::Orchestrator, polyvec::PolyVec, utils::PolyError};
+
+pub struct DummyModule<'a, const NOBS: usize> {
     pin: Output<'a>,
+    alive: bool,
+    observer_ids: PolyVec<u64, NOBS>
 }
 
-impl<'a> EmbeddedModule for DummyModule<'a> {
-    fn exec_module_task(&mut self) {
-        let mut level= self.pin.get_output_level();
+impl<'a, const NOBS: usize> EmbeddedModule<NOBS> for DummyModule<'a, NOBS> {
+    fn exec_module_task(&mut self) -> Option<(EventData, PolyVec<u64, NOBS>)> {
         self.pin.toggle();
-        level= self.pin.get_output_level();
-        let a= 1;
+        return None;
+        //return Some((EventData::TrigPin, self.observer_ids));
+    }
+
+    fn exec_callback(&mut self, data: &EventData) -> Option<(EventData, PolyVec<u64, NOBS>)> {
+        self.pin.toggle();
+        //return Some((EventData::TrigPin, self.observer_ids));
+        return None;
+    }
+
+    fn set_observer_ids(&mut self, observers: PolyVec<u64, NOBS>) {
+        self.observer_ids= observers;
+    }
+
+    fn get_observer_ids(&self) -> PolyVec<u64, NOBS> {
+        return self.observer_ids;
+    }
+
+    fn set_alive_status(&mut self, status: bool) {
+        self.alive= status;
+    }
+    
+    fn is_alive(&self) -> bool {
+        return self.alive;
+    }
+}
+
+impl<'a, const NOBS: usize> DummyModule<'a, NOBS> {
+    pub fn new(p: Output<'a>) -> Self {
+        return Self { pin: p, alive: true, observer_ids: PolyVec::<u64, NOBS>::new_empty() };
     }
 }
 
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {
-    //Initialize all the peripherals
+    //Defines the hardware peripherals used for the system
     let peripherals = embassy_stm32::init(Default::default());
-    //Create objects before passing them to the workers to satisfy the lifetime constraint
     let mut pin1= Output::new(peripherals.PA5, Level::Low, Speed::Low);
-    let mut pin2= Output::new(peripherals.PA3, Level::High, Speed::Low);
-    let mut mod1= DummyModule { pin: pin1 };
-    let mut mod2= DummyModule { pin: pin2 };
-    let mut worker1= EmbeddedWorker::<1>::new(&mut mod2, 1000);
-    let mut worker2= EmbeddedWorker::<1>::new(&mut mod1, 10);
-    worker1.attach_next_worker(&mut worker2);
-    
-    defmt::info!("Hello World!");
-
-    // Your application code goes here
+    let mut pin2= Output::new(peripherals.PA6, Level::High, Speed::Low);
+    //Define the modules contained in the system
+    let mut mod1 = DummyModule::<2>::new(pin1);
+    let mut mod2 = DummyModule::<2>::new(pin2);
+    //Link the modules between them
+    mod1.set_observer_ids(PolyVec::<u64, 2>::from_array([2]));
+    mod2.set_observer_ids(PolyVec::<u64, 2>::from_array([1]));
+    //Defines the orchestrator that execute the modules tasks
+    let mut orchestr= Orchestrator::<2, 2>::new();
+    //Register all the modules used by the orchestrator
+    orchestr.register(1, &mut mod1, 0);
+    orchestr.register(2, &mut mod2, 0);
+    //Set the execution order of the tasks modules
+    orchestr.set_execution_graph(PolyVec::<u64, 2>::from_array([1, 2]));
+    let mut exec_time= Instant::now();
     loop {
-        let next_exec_time= worker1.try_run();
-        //let time_to_sleep= next_exec_time.duration_since(Instant::now()).as_millis();
-        /*if time_to_sleep > 0 {
-            Timer::after_micros(time_to_sleep);
-        }*/
+        if Instant::now().as_micros() > exec_time.as_micros() {
+            if let Some(next_time)= orchestr.launch_execution_graph() {
+                exec_time= next_time;
+            }
+            /*let remain_time= Instant::now() - exec_time;
+            if remain_time.as_micros() > 0 {
+                Timer::after(remain_time);
+            }*/
+        }
+        //let next_exec_time= worker1.try_run();
     }
 }

@@ -4,36 +4,39 @@ use embassy_stm32::timer::low_level::OutOfRangeError;
 
 use crate::embed_core::utils::VecError;
 
-pub struct PolyVec<T, const N: usize> {
-    elements: [Option<T>; N],
+#[derive(Copy, Clone)]
+pub struct PolyVec<T, const NELE: usize> {
+    elements: [Option<T>; NELE],
     size: usize
 }
 
-impl<T, const N: usize> PolyVec<T, N> {
+impl<T, const NELE: usize> PolyVec<T, NELE> {
     pub fn new_empty() -> Self {
-        return Self { elements: [const {None}; N], size: 0 }
+        return Self { elements: core::array::from_fn(|_| None), size: 0 }
     }
 
-    pub fn from_array<const M: usize>(elements: [T; M]) -> Self {
-        //Convert the [T; M] to [Option<T>; M]
-        let mut elements= elements.map(Some);
-        let mut elems=  [const {None}; N];
-        let mut sz= 0;
-        if M > N {
-            return Self { elements: elems, size: sz }; 
-        } else {
-            for i in 0..elements.len() {
-                //.take() put T::default() -> None to the ieme elements
-                //  and return the replaced value
-                elems[i]= elements[i].take();
+    pub fn from_array<I: IntoIterator<Item = T>>(elements: I) -> Self {
+        //Fill the polyvec array with default value -> None
+        let mut elems = core::array::from_fn(|_| None);
+        let mut sz = 0;
+        // elements.into_iter() takes ownership of the array and give the ability to iterate over it
+        for ele in elements.into_iter() {
+            // If the input has more ele than our capacity, 
+            if sz >= NELE {
+                return Self { 
+                    elements: core::array::from_fn(|_| None), 
+                    size: 0 
+                };
             }
-            sz= M;
-            return Self { elements: elems, size: sz };
+            // Move the ele in the polyvec array of elements
+            elems[sz] = Some(ele);
+            sz += 1;
         }
+        return Self { elements: elems, size: sz };
     }
 
     pub fn push_back(&mut self, data: T) -> Result<usize, VecError> {
-        if self.size + 1 > N {
+        if self.size + 1 > NELE {
             return Err(VecError::CapacityExceeded)
         } else {
             self.elements[self.size]= Some(data);
@@ -42,8 +45,8 @@ impl<T, const N: usize> PolyVec<T, N> {
         }
     }
 
-    pub fn push_range<const M: usize>(&mut self, data: [T; M]) -> Result<usize, VecError> {
-        if self.size + M > N {
+    pub fn push_range<const nELE: usize>(&mut self, data: [T; nELE]) -> Result<usize, VecError> {
+        if self.size + nELE > NELE {
             return Err(VecError::CapacityExceeded)
         } else {
             let mut data= data.map(Some);
@@ -87,6 +90,11 @@ impl<T, const N: usize> PolyVec<T, N> {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.elements= core::array::from_fn(|_| None);
+        self.size= 0;
+    }
+
     pub fn pop(&mut self, index: usize) -> Result<Option<T>, VecError> {
         if index >= self.size {
             return Err(VecError::OutOfBounds)
@@ -101,6 +109,14 @@ impl<T, const N: usize> PolyVec<T, N> {
         return Ok(data)
     }
 
+    pub fn get(&self, index: usize) -> &Option<T> {
+        return &self.elements[index];
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> &mut Option<T> {
+        return &mut self.elements[index];
+    }
+
     pub fn to_slice(&self) -> &[Option<T>] {
         return &self.elements[..self.size];
     }
@@ -110,11 +126,11 @@ impl<T, const N: usize> PolyVec<T, N> {
     }
 
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         return self.size;
     }
 
-    pub fn capacity(&self) -> usize {
-        return N;
+    pub const fn capacity(&self) -> usize {
+        return NELE;
     }
 }
