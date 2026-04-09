@@ -613,6 +613,18 @@
     [
       "79b4cb2a-f6d9-4b38-aa7c-6f68614d47a5",
       "Root"
+    ],
+    [
+      "8788256f-066a-4b7a-8177-ea6e41d61eae",
+      "Motor_Phase_Power_Stage"
+    ],
+    [
+      "5b0f72be-508d-4867-9667-978556980a49",
+      "Motor_Phase_Power_Stage1"
+    ],
+    [
+      "82b89263-41c5-43aa-8de6-68d0e32b116a",
+      "Motor_Phase_Power_Stage2"
     ]
   ],
   "text_variables": {}
