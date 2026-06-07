@@ -166,7 +166,7 @@
     <include>
       <uri>model://osprai</uri>
       <name>osprai</name>
-      <pose>0 0 0.2 0 0 0</pose>
+      <pose>0 0 0.06 0 0 0</pose>
     </include>
 
   </world>

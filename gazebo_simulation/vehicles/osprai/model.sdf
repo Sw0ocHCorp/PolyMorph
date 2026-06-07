@@ -208,10 +208,9 @@
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <!-- Set physical limits for the tilt mechanism (e.g., slightly past 0 and 90 degrees) -->
           <lower>-3.14159</lower>
-          <upper>3.14159</upper> 
-          <effort>5.0</effort>
+          <upper>3.14159</upper>
+          <effort>1.0</effort>
         </limit>
         <dynamics>
           <damping>0.1</damping>
@@ -302,8 +301,8 @@
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-3.14159</lower>
-          <upper>3.14159</upper> 
-          <effort>5.0</effort>
+          <upper>3.14159</upper>
+          <effort>1.0</effort>
         </limit>
         <dynamics>
           <damping>0.1</damping>
@@ -389,26 +388,29 @@
     
     <!-- ===================== TILT ACTUATORS ===================== -->
     <!-- Each holds its arm at the angle (rad) published as gz.msgs.Double. -->
+    <!-- Gains tuned for arm+rotor tilt inertia ~0.00023 kg·m² at 1 ms physics step.
+         Per-step motion = 0.5*(cmd_max/I)*dt² must stay <0.1° for stable integration;
+         at cmd_max=0.5 N·m this gives ~0.05°/step. -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>tilt_left</joint_name>
       <topic>/osprai/command/tilt_left</topic>
-      <p_gain>25.0</p_gain>
-      <i_gain>1.0</i_gain>
-      <d_gain>2.0</d_gain>
-      <cmd_max>20.0</cmd_max>
-      <cmd_min>-20.0</cmd_min>
+      <p_gain>0.2</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.01</d_gain>
+      <cmd_max>0.5</cmd_max>
+      <cmd_min>-0.5</cmd_min>
     </plugin>
-    
+
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>tilt_right</joint_name>
       <topic>/osprai/command/tilt_right</topic>
-      <p_gain>25.0</p_gain>
-      <i_gain>1.0</i_gain>
-      <d_gain>2.0</d_gain>
-      <cmd_max>20.0</cmd_max>
-      <cmd_min>-20.0</cmd_min>
+      <p_gain>0.2</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.01</d_gain>
+      <cmd_max>0.5</cmd_max>
+      <cmd_min>-0.5</cmd_min>
     </plugin>
 
     <plugin filename="gz-sim-odometry-publisher-system"
@@ -426,6 +428,14 @@
       <joint_name>spin_left</joint_name>
       <joint_name>spin_right</joint_name>
     </plugin>
+
+    <!-- TESTING ONLY: anchors the body to the world so arm tilt testing
+         is not polluted by body pitch reaction. Remove when attitude
+         controller / motor lift is added. -->
+    <joint name="world_anchor" type="fixed">
+      <parent>world</parent>
+      <child>base_link</child>
+    </joint>
 
   </model>
 </sdf>
