@@ -1,0 +1,173 @@
+<?xml version="1.0" ?>
+<!--
+  my_environment.sdf : a custom Gazebo world for the custom_uav drone.
+
+  Run with:
+    export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/absolute/path/to/uav_sim/models
+    gz sim -v 4 -r /absolute/path/to/uav_sim/worlds/my_environment.sdf
+
+  Then publish motor speeds on /custom_uav/command/motor_speed
+  (gz.msgs.Actuators) to make it fly. See README.md for the exact command.
+-->
+<sdf version="1.9">
+  <world name="my_environment">
+
+    <!-- ============ PHYSICS ============ -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- ============ WORLD ORIGIN (required for GPS / NavSat) ============ -->
+    <!-- Lat/lon of the simulated world origin. Change to wherever you want the
+         drone's takeoff point to be on Earth. -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971</latitude_deg>
+      <longitude_deg>8.546164</longitude_deg>
+      <elevation>0</elevation>
+      <heading_deg>0</heading_deg>
+    </spherical_coordinates>
+
+    <!-- ============ CORE SYSTEMS ============ -->
+    <!-- These are listed explicitly so the world runs the same way regardless
+         of your machine's default server config. -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-navsat-system"
+            name="gz::sim::systems::NavSat"/>
+
+    <!-- ============ SCENE / SKY ============ -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.8 1.0 1</background>
+      <sky></sky>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.3 -0.9</direction>
+    </light>
+
+    <!-- ============ GROUND ============ -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.3 0.35 0.3 1</ambient>
+            <diffuse>0.35 0.45 0.35 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============ HELIPAD (takeoff marker under the drone) ============ -->
+    <model name="helipad">
+      <static>true</static>
+      <pose>0 0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="pad">
+          <geometry><cylinder><radius>1.0</radius><length>0.02</length></cylinder></geometry>
+          <material>
+            <ambient>0.05 0.05 0.05 1</ambient>
+            <diffuse>0.1 0.1 0.1 1</diffuse>
+          </material>
+        </visual>
+        <collision name="pad_col">
+          <geometry><cylinder><radius>1.0</radius><length>0.02</length></cylinder></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ============ OBSTACLES ============ -->
+    <!-- Two buildings, a wall and a tower. Copy/edit these blocks to design
+         your own course. Everything is static so it won't move. -->
+    <model name="building_a">
+      <static>true</static>
+      <pose>8 4 2.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>4 4 5</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>4 4 5</size></box></geometry>
+          <material><ambient>0.5 0.4 0.35 1</ambient><diffuse>0.6 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="building_b">
+      <static>true</static>
+      <pose>-7 6 4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>3 3 8</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>3 3 8</size></box></geometry>
+          <material><ambient>0.4 0.45 0.5 1</ambient><diffuse>0.5 0.55 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall">
+      <static>true</static>
+      <pose>0 -8 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>12 0.4 3</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>12 0.4 3</size></box></geometry>
+          <material><ambient>0.6 0.6 0.6 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="tower">
+      <static>true</static>
+      <pose>-10 -6 5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.8</radius><length>10</length></cylinder></geometry></collision>
+        <visual name="v">
+          <geometry><cylinder><radius>0.8</radius><length>10</length></cylinder></geometry>
+          <material><ambient>0.5 0.3 0.3 1</ambient><diffuse>0.6 0.35 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============ SPAWN THE DRONE ============ -->
+    <!-- Found via GZ_SIM_RESOURCE_PATH (the models/ folder). Starts on the pad. -->
+    <include>
+      <uri>model://osprai</uri>
+      <name>osprai</name>
+      <pose>0 0 0.06 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

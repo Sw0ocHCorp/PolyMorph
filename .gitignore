@@ -15,3 +15,11 @@ robomorph/target/
 controller/target/
 
 *.lock
+
+companion/Logs/
+
+robomorph/Logs/
+
+gazebo_simulation/gazebo_vehicles_controller/target/
+
+*.zip

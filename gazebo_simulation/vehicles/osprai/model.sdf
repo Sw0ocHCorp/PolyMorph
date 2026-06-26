@@ -1,0 +1,441 @@
+<?xml version="1.0" ?>
+<!--
+  osprai: an Osprey-style tiltrotor BICOPTER for Gazebo Harmonic / Garden.
+
+  Two arms on the lateral (+/-Y) axis, each carrying one rotor. Each arm tilts
+  about the spanwise (Y) axis via a JointPositionController:
+       tilt = 0      -> rotor thrust points up   (hover)
+       tilt = +pi/2  -> rotor thrust points fwd  (cruise)
+  Rotors counter-rotate (left CCW, right CW) so reaction torques cancel in hover.
+  Each rotor's thrust is produced by a MulticopterMotorModel, and because the
+  rotor link is a child of the tilting arm, its thrust vector tilts with the arm.
+
+  Inputs (what the companion publishes):
+    /osprai/command/motor_speed  gz.msgs.Actuators velocity[0]=left, [1]=right
+    /osprai/command/tilt_left            gz.msgs.Double  (target angle, rad)
+    /osprai/command/tilt_right           gz.msgs.Double  (target angle, rad)
+  Outputs:
+    /osprai/imu                  gz.msgs.IMU
+    /model/osprai/odometry       gz.msgs.Odometry
+-->
+<sdf version="1.9">
+  <model name="osprai">
+    <pose>0 0 0 0 0 0</pose>
+    
+    <!-- ===================== FUSELAGE ===================== -->
+    <link name="base_link">
+      <inertial>
+        <mass>1.0</mass>
+        <inertia>
+          <ixx>0.0020</ixx>
+          <iyy>0.0217</iyy>
+          <izz>0.0220</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="body_visual">
+        <geometry>
+          <box>
+            <size>0.50 0.12 0.10</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.12 1</ambient>
+          <diffuse>0.15 0.15 0.2 1</diffuse>
+        </material>
+      </visual>
+      <collision name="body_collision">
+        <geometry><box><size>0.50 0.12 0.10</size></box></geometry>
+      </collision>
+      <!-- Spar drawn across the top so the geometry reads as an Osprey. -->
+      <visual name="spar_visual">
+        <pose>0 0 0.10 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.04 0.62 0.04</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.4 0.4 0.45 1</diffuse>
+        </material>
+      </visual>
+      <visual name="front_direction_marker">
+        <pose>0.26 0 0.05 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.02 0.10 0.05</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>1 0 0 1</ambient>
+          <diffuse>1 0 0 1</diffuse>
+        </material>
+      </visual>
+      <sensor name="imu_sensor" type="imu">
+        <always_on>1</always_on>
+        <update_rate>250</update_rate>
+        <topic>osprai/imu</topic>
+      </sensor>
+      <!-- ===== STEREO CAMERA PAIR (forward, baseline 0.12 m) ===== -->
+      <!-- Both cameras are coplanar and parallel (face +X); the baseline is the
+           Y separation (0.06 - (-0.06) = 0.12 m), which you'll need for the
+           stereo disparity-to-depth math. -->
+      <sensor name="camera_left" type="camera">
+        <pose>0.26 0.06 0 0 0 0</pose>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <topic>osprai/cameras/left</topic>
+        <gz_frame_id>camera_left</gz_frame_id>
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+          <image>
+            <width>1280</width>
+            <height>720</height>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>300</far>
+          </clip>
+        </camera>
+      </sensor>
+      <sensor name="camera_right" type="camera">
+        <pose>0.26 -0.06 0 0 0 0</pose>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <topic>osprai/cameras/right</topic>
+        <gz_frame_id>camera_right</gz_frame_id>
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+          <image>
+            <width>1280</width>
+            <height>720</height>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>300</far>
+          </clip>
+        </camera>
+      </sensor>
+      <!-- ===== 3D LIDAR (16-beam, 360 deg horizontal, mounted on top) ===== -->
+      <sensor name="lidar" type="gpu_lidar">
+        <pose>0 0 0.18 0 0 0</pose>
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <visualize>true</visualize>
+        <topic>osprai/lidar</topic>
+        <gz_frame_id>lidar</gz_frame_id>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>16</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.261799</min_angle>
+              <max_angle>0.261799</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.2</min>
+            <max>30.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+      <!-- ===== GPS (NavSat). Needs the NavSat world plugin + the world's
+           <spherical_coordinates> origin, both added in my_environment.sdf. ===== -->
+      <sensor name="navsat" type="navsat">
+        <always_on>1</always_on>
+        <update_rate>5</update_rate>
+        <topic>osprai/gps</topic>
+        <gz_frame_id>navsat</gz_frame_id>
+      </sensor>
+    </link>
+    
+    <!-- ===================== LEFT ARM (+Y) ===================== -->
+    <link name="arm_left">
+      <pose>0 0.18 0.10 0 1.5708 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.0004</ixx>
+          <iyy>0.00005</iyy>
+          <izz>0.0004</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="arm_left_visual">
+        <geometry>
+          <box>
+            <size>0.03 0.26 0.03</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.5 0.5 0.55 1</diffuse>
+        </material>
+      </visual>
+      <visual name="arm_left_up_marker">
+        <pose>0 0 0.025 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.01 0.05 0.04</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0 1 0 1</ambient>
+          <diffuse>0 1 0 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    
+    <!-- Tilt joint: rotates the whole arm about Y. Driven to a target angle. -->
+    <joint name="tilt_left" type="revolute">
+      <parent>base_link</parent>
+      <child>arm_left</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>-3.14159</lower>
+          <upper>3.14159</upper>
+          <effort>1.0</effort>
+        </limit>
+        <dynamics>
+          <damping>0.1</damping>
+        </dynamics>
+      </axis>
+    </joint>
+    
+    <link name="rotor_left">
+      <pose>0 0.30 0.10 0 1.5708 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.00018</ixx>
+          <iyy>0.00018</iyy>
+          <izz>0.00036</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="rotor_left_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.12</radius>
+            <length>0.015</length>
+            </cylinder>
+          </geometry>
+        <material>
+          <diffuse>0.8 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    
+    <!-- Spin joint: rotor spins about its local Z; tilts with the arm. -->
+    <joint name="spin_left" type="revolute">
+      <parent>arm_left</parent>
+      <child>rotor_left</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+    
+    <!-- ===================== RIGHT ARM (-Y) ===================== -->
+    <link name="arm_right">
+      <pose>0 -0.18 0.10 0 1.5708 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.0004</ixx>
+          <iyy>0.00005</iyy>
+          <izz>0.0004</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="arm_right_visual">
+        <geometry>
+          <box>
+            <size>0.03 0.26 0.03</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.5 0.5 0.55 1</diffuse>
+        </material>
+      </visual>
+      <visual name="arm_right_up_marker">
+        <pose>0 0 0.025 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.01 0.05 0.04</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0 1 0 1</ambient>
+          <diffuse>0 1 0 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name="tilt_right" type="revolute">
+      <parent>base_link</parent>
+      <child>arm_right</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>-3.14159</lower>
+          <upper>3.14159</upper>
+          <effort>1.0</effort>
+        </limit>
+        <dynamics>
+          <damping>0.1</damping>
+        </dynamics>
+      </axis>
+    </joint>
+    
+    <link name="rotor_right">
+      <pose>0 -0.30 0.10 0 -1.5708 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.00018</ixx>
+          <iyy>0.00018</iyy>
+          <izz>0.00036</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="rotor_right_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.12</radius>
+            <length>0.015</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <diffuse>0.2 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name="spin_right" type="revolute">
+      <parent>arm_right</parent>
+      <child>rotor_right</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+    
+    <!-- ===================== ROTOR THRUST ===================== -->
+    <plugin filename="gz-sim-multicopter-motor-model-system"
+            name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace>osprai</robotNamespace>
+      <jointName>spin_left</jointName>
+      <linkName>rotor_left</linkName>
+      <turningDirection>ccw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>1200.0</maxRotVelocity>
+      <motorConstant>1.2e-05</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>0</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+    
+    <plugin filename="gz-sim-multicopter-motor-model-system"
+            name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace>osprai</robotNamespace>
+      <jointName>spin_right</jointName>
+      <linkName>rotor_right</linkName>
+      <turningDirection>cw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>1200.0</maxRotVelocity>
+      <motorConstant>1.2e-05</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>1</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+    
+    <!-- ===================== TILT ACTUATORS ===================== -->
+    <!-- Each holds its arm at the angle (rad) published as gz.msgs.Double. -->
+    <!-- Gains tuned for arm+rotor tilt inertia ~0.00023 kg·m² at 1 ms physics step.
+         Per-step motion = 0.5*(cmd_max/I)*dt² must stay <0.1° for stable integration;
+         at cmd_max=0.5 N·m this gives ~0.05°/step. -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>tilt_left</joint_name>
+      <topic>/osprai/command/tilt_left</topic>
+      <p_gain>0.2</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.01</d_gain>
+      <cmd_max>0.5</cmd_max>
+      <cmd_min>-0.5</cmd_min>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>tilt_right</joint_name>
+      <topic>/osprai/command/tilt_right</topic>
+      <p_gain>0.2</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.01</d_gain>
+      <cmd_max>0.5</cmd_max>
+      <cmd_min>-0.5</cmd_min>
+    </plugin>
+
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>world</odom_frame>
+      <robot_base_frame>osprai</robot_base_frame>
+      <dimensions>3</dimensions>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/osprai/joint_state</topic>
+      <joint_name>tilt_left</joint_name>
+      <joint_name>tilt_right</joint_name>
+      <joint_name>spin_left</joint_name>
+      <joint_name>spin_right</joint_name>
+    </plugin>
+
+    <!-- TESTING ONLY: anchors the body to the world so arm tilt testing
+         is not polluted by body pitch reaction. Remove when attitude
+         controller / motor lift is added. -->
+    <joint name="world_anchor" type="fixed">
+      <parent>world</parent>
+      <child>base_link</child>
+    </joint>
+
+  </model>
+</sdf>

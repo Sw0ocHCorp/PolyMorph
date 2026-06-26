@@ -1,0 +1,12 @@
+[package]
+name = "gazebo_vehicles_controller"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gz = { version = "0.10.0", features = ["harmonic"] }
+robomorph= {path= "../../robomorph"}
+chrono = "0.4.45"
+prost = "0.14"
+prost-derive = "0.14.4"
+tokio = { version = "1.52.3", features = ["full"] }
