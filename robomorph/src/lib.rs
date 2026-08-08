@@ -1,6 +1,7 @@
 pub mod messages;
 pub mod core;
 pub mod communications;
+pub mod control;
 
 
 #[cfg(test)]

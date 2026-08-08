@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use robomorph::{communications::interface::HardwareInterface, messages::registered_message::AnyMessage};
 
 /// Trait that give the fundamental methods of all the vehicle controllers connected to Gazebo simulation environment (Simulation)
@@ -15,7 +17,9 @@ pub trait VehicleController {
     /// Arguments:
     /// 
     /// setpoints: list of the setpoints to apply
-    fn apply_actuator_setpoints(&mut self, setpoints: Vec<AnyMessage>);
+    ///
+    /// dt: time elapsed since the last call, forwarded to the motion controller to integrate rate-based corrections
+    fn apply_actuator_setpoints(&mut self, setpoints: Vec<AnyMessage>, dt: Duration);
 
     /// Send telemetry data to the telemetry receiver linked to telemetry_sender
     /// 

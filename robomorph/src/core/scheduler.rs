@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc}, thread};
 use std::time::{Duration, Instant};
 
 use tokio::sync::broadcast::{Receiver, Sender, channel};
@@ -7,6 +7,7 @@ use crate::{communications::interface::HardwareInterface, messages::registered_m
 
 /// Trait that give the fundamental methods of all the processes
 pub trait Process {
+    fn set_name(&mut self, name: String);
     /// Execute the process task. The main task of the process
     fn exec(&mut self, inputs: Option<AnyMessage>, dt: Duration) -> Option<AnyMessage>;
     /// Helper function that force the Process to have receiver object to receive cmd from other process or interface
@@ -59,29 +60,48 @@ impl<P: Process + ?Sized> ProcessesChain<P> {
         let mut state = None;
         let len = self.processes.len();
         for i in 0..len {
-            let dt1 = self.processes[i].1;
-            let repeat = if i + 1 < len {
-                let dt1_ms = dt1.as_millis();
-                let dt2_ms = self.processes[i + 1].1.as_millis();
-                if dt1_ms > 0 && dt2_ms > dt1_ms {
-                    (dt2_ms / dt1_ms).max(1) as usize
-                } else {
-                    1
+            let dt1_ms = self.processes[i].1;
+            //the instant when the current process will end it's work
+            let mut next_process_instant= Instant::now() + dt1_ms;
+            if i+1 < len {
+                let dt2_ms = self.processes[i + 1].1;
+                //IF the current process requires multiple executions of its task before the next process's task is executed
+                //update the instant at the end of the multiple jobs of the current process end
+                if dt1_ms < dt2_ms {
+                    next_process_instant += dt2_ms - dt1_ms;
                 }
-            } else {
-                1
-            };
-
-            for _ in 0..repeat {
-                let exec_start = Instant::now();
+                    
+            }
+            let mut real_dt= dt1_ms;
+            //the instant when the next task will be executed (the current process's task or the next process's task)
+            let mut next_instant= Instant::now() + dt1_ms;
+            //WHILE there is a task to execute for the current process
+            while next_process_instant.saturating_duration_since(Instant::now()).as_millis() > 0 {
+                //instant before execute the task and sleep waiting the following task instant
+                let start= Instant::now();
+                //execute the task of the process
                 let (process, _) = &mut self.processes[i];
-                state = process.exec(state, dt1);
-                if dt1 > Duration::ZERO {
-                    let elapsed = exec_start.elapsed();
-                    if elapsed < dt1 {
-                        std::thread::sleep(dt1 - elapsed);
-                    }
+                state = process.exec(state, real_dt);
+                //wait the remaining time before the next task instant
+                thread::sleep(next_instant.saturating_duration_since(Instant::now()));
+                //the instant after waiting for the next task instant
+                let now= Instant::now();
+                //update the next task instant
+                next_instant += dt1_ms;
+                //IF the next task instant is the start of the next process job
+                //stop executing the current task because there is no more work for the current process
+                if next_process_instant < next_instant + dt1_ms {
+                    next_instant= next_process_instant;
                 }
+                //ELSE IF the worker task take too long
+                //compute the next task execution instant from now
+                else if next_instant < now {
+                    next_instant= now + dt1_ms;
+                }
+                let stop= Instant::now();
+                //Compute the real elapsed time in this worker loop
+                //really usefull for worker that require precise duration measurement
+                real_dt= stop - start;
             }
         }
         return state;

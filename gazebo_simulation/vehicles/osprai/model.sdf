@@ -3,17 +3,20 @@
   osprai: an Osprey-style tiltrotor BICOPTER for Gazebo Harmonic / Garden.
 
   Two arms on the lateral (+/-Y) axis, each carrying one rotor. Each arm tilts
-  about the spanwise (Y) axis via a JointPositionController:
-       tilt = 0      -> rotor thrust points up   (hover)
-       tilt = +pi/2  -> rotor thrust points fwd  (cruise)
+  about the spanwise (Y) axis via a JointPositionController. NOTE the arm and
+  rotor links have a +pi/2 rest pose about Y, so the tilt angle that points
+  thrust UP is -pi/2, NOT 0:
+       tilt = -pi/2  -> rotor thrust points up   (hover)
+       tilt = 0      -> rotor thrust points fwd  (cruise)
+       tilt = +pi/2  -> rotor thrust points down
   Rotors counter-rotate (left CCW, right CW) so reaction torques cancel in hover.
   Each rotor's thrust is produced by a MulticopterMotorModel, and because the
   rotor link is a child of the tilting arm, its thrust vector tilts with the arm.
 
   Inputs (what the companion publishes):
-    /osprai/command/motor_speed  gz.msgs.Actuators velocity[0]=left, [1]=right
-    /osprai/command/tilt_left            gz.msgs.Double  (target angle, rad)
-    /osprai/command/tilt_right           gz.msgs.Double  (target angle, rad)
+    /osprai/command/motor_setpoints  gz.msgs.Actuators
+      velocity[0]=left rotor speed, velocity[1]=right rotor speed (rad/s)
+      position[0]=left arm tilt,    position[1]=right arm tilt    (rad)
   Outputs:
     /osprai/imu                  gz.msgs.IMU
     /model/osprai/odometry       gz.msgs.Odometry
@@ -165,7 +168,7 @@
     
     <!-- ===================== LEFT ARM (+Y) ===================== -->
     <link name="arm_left">
-      <pose>0 0.18 0.10 0 1.5708 0</pose>
+      <pose>0 0.18 0.10 0 0 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -208,18 +211,19 @@
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-3.14159</lower>
-          <upper>3.14159</upper>
+          <lower>-1.57</lower>
+          <upper>1.57</upper>
+          <velocity>10.0</velocity>
           <effort>1.0</effort>
         </limit>
         <dynamics>
-          <damping>0.1</damping>
+          <damping>0.02</damping>
         </dynamics>
       </axis>
     </joint>
     
     <link name="rotor_left">
-      <pose>0 0.30 0.10 0 1.5708 0</pose>
+      <pose>0 0.30 0.10 0 0 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -259,7 +263,7 @@
     
     <!-- ===================== RIGHT ARM (-Y) ===================== -->
     <link name="arm_right">
-      <pose>0 -0.18 0.10 0 1.5708 0</pose>
+      <pose>0 -0.18 0.10 0 0 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -300,18 +304,19 @@
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-3.14159</lower>
-          <upper>3.14159</upper>
+          <lower>-1.57</lower>
+          <upper>1.57</upper>
+          <velocity>10.0</velocity>
           <effort>1.0</effort>
         </limit>
         <dynamics>
-          <damping>0.1</damping>
+          <damping>0.02</damping>
         </dynamics>
       </axis>
     </joint>
     
     <link name="rotor_right">
-      <pose>0 -0.30 0.10 0 -1.5708 0</pose>
+      <pose>0 -0.30 0.10 0 0 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -359,11 +364,11 @@
       <maxRotVelocity>1200.0</maxRotVelocity>
       <motorConstant>1.2e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <commandSubTopic>command/motor_setpoints</commandSubTopic>
       <actuator_number>0</actuator_number>
       <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
       <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <rotorVelocitySlowdownSim>1</rotorVelocitySlowdownSim>
       <motorType>velocity</motorType>
     </plugin>
     
@@ -378,39 +383,45 @@
       <maxRotVelocity>1200.0</maxRotVelocity>
       <motorConstant>1.2e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <commandSubTopic>command/motor_setpoints</commandSubTopic>
       <actuator_number>1</actuator_number>
       <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
       <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <rotorVelocitySlowdownSim>1</rotorVelocitySlowdownSim>
       <motorType>velocity</motorType>
     </plugin>
     
     <!-- ===================== TILT ACTUATORS ===================== -->
-    <!-- Each holds its arm at the angle (rad) published as gz.msgs.Double. -->
+    <!-- Each holds its arm at the angle (rad) read from position[actuator_number] of the
+         shared gz.msgs.Actuators message on /osprai/command/motor_setpoints (same topic and
+         message the rotors read velocity[] from - position/velocity are independent arrays). -->
     <!-- Gains tuned for arm+rotor tilt inertia ~0.00023 kg·m² at 1 ms physics step.
          Per-step motion = 0.5*(cmd_max/I)*dt² must stay <0.1° for stable integration;
          at cmd_max=0.5 N·m this gives ~0.05°/step. -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>tilt_left</joint_name>
-      <topic>/osprai/command/tilt_left</topic>
-      <p_gain>0.2</p_gain>
+      <use_actuator_msg>true</use_actuator_msg>
+      <actuator_number>0</actuator_number>
+      <topic>/osprai/command/motor_setpoints</topic>
+      <p_gain>20.0</p_gain>
       <i_gain>0.0</i_gain>
-      <d_gain>0.01</d_gain>
-      <cmd_max>0.5</cmd_max>
-      <cmd_min>-0.5</cmd_min>
+      <d_gain>0.13</d_gain>
+      <cmd_max>0.8</cmd_max>
+      <cmd_min>-0.8</cmd_min>
     </plugin>
 
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>tilt_right</joint_name>
-      <topic>/osprai/command/tilt_right</topic>
-      <p_gain>0.2</p_gain>
+      <use_actuator_msg>true</use_actuator_msg>
+      <actuator_number>1</actuator_number>
+      <topic>/osprai/command/motor_setpoints</topic>
+      <p_gain>20.0</p_gain>
       <i_gain>0.0</i_gain>
-      <d_gain>0.01</d_gain>
-      <cmd_max>0.5</cmd_max>
-      <cmd_min>-0.5</cmd_min>
+      <d_gain>0.13</d_gain>
+      <cmd_max>0.8</cmd_max>
+      <cmd_min>-0.8</cmd_min>
     </plugin>
 
     <plugin filename="gz-sim-odometry-publisher-system"
@@ -428,14 +439,6 @@
       <joint_name>spin_left</joint_name>
       <joint_name>spin_right</joint_name>
     </plugin>
-
-    <!-- TESTING ONLY: anchors the body to the world so arm tilt testing
-         is not polluted by body pitch reaction. Remove when attitude
-         controller / motor lift is added. -->
-    <joint name="world_anchor" type="fixed">
-      <parent>world</parent>
-      <child>base_link</child>
-    </joint>
 
   </model>
 </sdf>

@@ -47,5 +47,6 @@ pub fn encode_frame(msg: &AnyMessage) -> Vec<u8> {
         AnyMessage::MotorState(m) => m.to_frame(),
         AnyMessage::PoseState(m)  => m.to_frame(),
         AnyMessage::LidarState(m) => m.to_frame(),
+        AnyMessage::MotorCommands(m) => {return vec![]},
     }
 }

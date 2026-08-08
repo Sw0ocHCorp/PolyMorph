@@ -1,18 +1,13 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
 
 use crate::communications::interface::{HardwareInterface, decode_frame, encode_frame};
 use crate::core::scheduler::Process;
-use crate::messages::registered_message::{AnyMessage, MessageType, Translatable};
-use crate::messages::{
-    lidar_messages::LidarMeasurements,
-    motor_messages::MotorFeedBack,
-    pose_messages::{GNSSMeasurement, IMUMeasurements, Pose},
-};
+use crate::messages::registered_message::AnyMessage;
+
 /// Struct that represent an UDP hardware interface
 pub struct UdpInterface {
     /// Address of the interface
