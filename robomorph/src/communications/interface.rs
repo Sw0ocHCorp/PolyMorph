@@ -1,15 +1,23 @@
+//! External links of the stack (`HardwareInterface`: UDP today, UART later) and the wire codec
+//! shared by all of them: a frame is `[1-byte MessageType][protobuf payload]`.
+
 use crate::{core::scheduler::Process, messages::{lidar_messages::LidarMeasurements, motor_messages::MotorFeedBack, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, MessageType, Translatable}}};
 
 /// Trait that give the fundamental methods of all the hardware communication interfaces (UART / UDP / etc...)
+///
+/// An interface is NOT a scheduled `Process`: the scheduler only calls `connect()` once
+/// (`Scheduler::start_all_interfaces`) and `disconnect()` at shutdown. The interface runs its own
+/// RX / TX threads and exchanges `AnyMessage`s with the processes through broadcast channels.
 pub trait HardwareInterface {
+    /// Open the link and start the background threads. `Err` carries a human readable reason.
     fn connect(&mut self) -> Result<(), String>;
+    /// Encode `msg` and send it synchronously on the caller's thread (bypasses the TX thread).
     fn send_message(&mut self, msg: AnyMessage);
+    /// Pull-style read of one incoming message, when the implementation supports it
+    /// (`UdpInterface` pushes received frames on its broadcast channel instead and returns `None`).
     fn listen(&mut self) -> Option<AnyMessage>;
+    /// Close the link and join the background threads.
     fn disconnect(&mut self);
-    /// Set the frame receiver that is frame to send buffer
-    fn set_outbound_rx(&mut self, receiver: tokio::sync::mpsc::Receiver<AnyMessage>);
-    /// Connect the interface to a process to be able to send incoming data and receive frame to send from the given Process
-    fn connect_process(&mut self, proc: &mut dyn Process);
 }
 
 
@@ -18,6 +26,11 @@ pub trait HardwareInterface {
 /// Notes:
 /// 
 /// Generic function because the is only one way to decode byte array to protobuf struct
+///
+/// Dispatches on the tag byte `buf[0]` and prost-decodes the rest. Returns `None` for a frame
+/// shorter than 2 bytes, an unknown tag, or a payload that fails to decode.
+// NOTE: `MotorModelMessage` and `RemoteControlMessage` have no arm here although both types are
+// encodable (`Translatable`): such frames are silently dropped on reception.
 pub fn decode_frame(buf: &[u8]) -> Option<AnyMessage> {
     if buf.len() < 2 { return None; }
     match buf[0] {
@@ -40,6 +53,10 @@ pub fn decode_frame(buf: &[u8]) -> Option<AnyMessage> {
 /// Notes:
 /// 
 /// Generic function because the is only one way to encode protobuf struct in u8 vector
+// NOTE: `MotorCommands` and `VehicleWrench` are internal-only and encode to an EMPTY frame. The
+// UDP TX thread sends whatever this returns, so such a message reaching the interface's channel
+// goes out as an empty datagram, which is exactly the "poison pill" a `UdpInterface` RX thread
+// interprets as a stop request (see `UdpInterface::disconnect`).
 pub fn encode_frame(msg: &AnyMessage) -> Vec<u8> {
     match msg {
         AnyMessage::ImuState(m)   => m.to_frame(),
@@ -47,6 +64,8 @@ pub fn encode_frame(msg: &AnyMessage) -> Vec<u8> {
         AnyMessage::MotorState(m) => m.to_frame(),
         AnyMessage::PoseState(m)  => m.to_frame(),
         AnyMessage::LidarState(m) => m.to_frame(),
-        AnyMessage::MotorCommands(m) => {return vec![]},
+        AnyMessage::MotorCommands(m) => return vec![],
+        AnyMessage::VehicleWrench(work_vec) => return vec![],
+        AnyMessage::RemoteControl(m) => {return m.to_frame()},
     }
 }

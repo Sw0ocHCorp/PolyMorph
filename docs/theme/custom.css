@@ -1,0 +1,30 @@
+/* Figures ------------------------------------------------------------------ */
+svg.diagram {
+    display: block;
+    margin: 1.6rem auto 0.4rem auto;
+    max-width: 100%;
+    height: auto;
+}
+svg.diagram text { fill: currentColor; font-family: var(--mono-font, system-ui), sans-serif; }
+figure { margin: 0 0 1.8rem 0; }
+figcaption {
+    text-align: center;
+    font-size: 0.88em;
+    opacity: 0.7;
+    margin-top: 0.2rem;
+}
+
+/* Tables ------------------------------------------------------------------- */
+table { margin: 1.2rem 0; }
+table th { text-align: left; }
+
+/* Callouts: blockquote used as a "rule / pitfall" box ----------------------- */
+blockquote {
+    border-left: 3px solid var(--links, #4a90d9);
+    background: rgba(128, 128, 128, 0.07);
+    padding: 0.6rem 1rem;
+    margin: 1.2rem 0;
+}
+
+/* Definition-style key/value paragraphs ------------------------------------ */
+.chapter li > a.active { font-weight: 600; }

@@ -1,4 +1,9 @@
 # PolyMorph
+
+> **Documentation** — architecture, mathematics and control pipelines: see [`docs/`](docs/README.md).
+> Build it with `cargo install mdbook` then `cd docs && mdbook serve --open`.
+
+
 PolyMorph is an Open Source Robotic Rust ecosystem.
 It is composed of:
 * Remote Controller

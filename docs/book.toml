@@ -1,0 +1,19 @@
+[book]
+title = "PolyMorph"
+authors = ["Sw0ocHCorp"]
+language = "en"
+src = "src"
+description = "Architecture, mathematics and mechanisms of the PolyMorph generic robotics control stack."
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Sw0ocHCorp/PolyMorph"
+additional-css = ["theme/custom.css"]
+fold = { enable = true, level = 2 }
+
+[output.html.search]
+enable = true

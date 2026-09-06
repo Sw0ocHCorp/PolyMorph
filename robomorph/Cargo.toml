@@ -14,3 +14,4 @@ prost-types = "0.14"
 prost-derive = "0.14.4"
 tokio = { version = "1.52.3", features = ["full"] }
 nalgebra = "0.35.0"
+gilrs = "0.11.2"

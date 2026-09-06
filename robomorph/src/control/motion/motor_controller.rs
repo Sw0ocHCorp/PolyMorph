@@ -1,9 +1,33 @@
+//! Per-motor building block of the control allocation: for every motor of the kinematic tree,
+//! how much wrench it contributes NOW (its "work vector") and how much wrench the vehicle would gain
+//! per unit of command on it (its "effectiveness column").
+//!
+//! The two are different objects and the distinction is the key to understanding the mixer:
+//!   - the COLUMN `a_j` is a SLOPE (a sensitivity): "if I add one newton / one radian on this motor,
+//!     what does the vehicle gain?". For a thruster it is pure geometry and exists even when the
+//!     rotor is stopped;
+//!   - the WORK VECTOR `w_j` is a VALUE: "what does this motor produce right now?". For a thruster
+//!     `w_j = T * a_j` where `T` is the current thrust (N) - zero when the rotor is stopped, while
+//!     the column is not. A lever keeps its lever arm when nobody pushes on it.
+//!
+//! An angular joint produces no wrench of its own: it reorients its children's. Its column AND its
+//! work vector are proportional to its children's thrust, so at start-up (rotors stopped) a joint has
+//! no authority at all and sits out of the allocation until the rotors' feedback reports thrust.
+//!
+//! Full derivation and notation: the NOTATION block in `motors_mixer.rs` and
+//! `docs/src/controle/modele-moteur.md`.
+
 use std::{collections::HashMap, fmt::{Display, Formatter}};
 
+use chrono::Utc;
 use nalgebra::{UnitQuaternion, UnitVector3, Vector3};
+use prost_types::Timestamp;
 
 use crate::{control::{pid_controller::PIDController}, messages::{motor_messages::{MotorFeedBack, MotorModel, MotorStatus, WorkVec, WorkingAxis}, pose_messages::Transform, registered_message::Vec3}};
 
+/// Roll / pitch / yaw (rad, ZYX convention) of a quaternion. DISPLAY ONLY: the control law never
+/// uses Euler angles (singular at +/-90 deg of pitch, and their axes are not the body axes on
+/// which the mixer produces moments). Useful to read a log.
 pub fn quaternion_to_euler(quat: &UnitQuaternion<f64>) -> [f64; 3] {
     let w = quat.w;
     let x = quat.i;
@@ -31,6 +55,9 @@ pub fn quaternion_to_euler(quat: &UnitQuaternion<f64>) -> [f64; 3] {
     return [roll, pitch, yaw];
 }
 
+/// 6D selector `[fx fy fz mx my mz]` of the single wrench component a motor acts on directly, from
+/// its `WorkingAxis`. Not used by the allocation (which builds full geometric columns), kept as a
+/// helper.
 /// Get the vector6 that map the axes of rotation and translation on which the motor exerts an influence(Expressed in the Body frame of the vehicle)
 pub fn working_axis_to_vec6(axis: WorkingAxis) -> [f64; 6] {
     let mut motor_axis= [0.0; 6];
@@ -63,6 +90,9 @@ pub fn working_axis_i32_to_vec6(axis: i32) -> [f64; 6] {
     return motor_axis;
 }
 
+/// The motor's own working axis `e_j` as a unit vector in ITS OWN frame: thrust direction for a
+/// thruster, rotation axis for a joint. Rotated by the resolved motor orientation it becomes
+/// `fhat` (thruster) or `ahat` (joint) in the body frame.
 pub fn working_axis_to_vec3(axis: WorkingAxis) -> UnitVector3<f64> {
     let mut motor_axis= Vector3::zeros();
     //the thruster effort axis of the motor 
@@ -78,6 +108,8 @@ pub fn working_axis_to_vec3(axis: WorkingAxis) -> UnitVector3<f64> {
     return UnitVector3::new_normalize(motor_axis);
 }
 
+/// Same as `working_axis_to_vec3` from the raw `i32` stored in the protobuf `MotorModel`.
+/// An unknown value yields a zero vector, normalised - callers must pass a valid axis.
 pub fn working_axis_i32_to_vec3(axis: i32) -> UnitVector3<f64> {
     let mut motor_axis= Vector3::zeros();
     if let Ok(working_axis) = WorkingAxis::try_from(axis) {
@@ -95,6 +127,18 @@ pub fn working_axis_i32_to_vec3(axis: i32) -> UnitVector3<f64> {
     return UnitVector3::new_normalize(motor_axis);
 }
 
+/// `Clone` is required to travel through a `broadcast` channel: the channel owns the value
+/// and hands a clone to every subscriber.
+/// One node of the vehicle's motor tree as the mixer sees it: its static description
+/// (`model`), its last known state (`feedback`) and a per-motor PID (reserved for local servoing,
+/// unused by the allocation).
+///
+/// The mixer keeps one `MotorController` per motor id, refreshed by the feedback channel. The
+/// feedback's `current_value` is the motor's CURRENT EFFORT in the mixer's own units:
+///   - thruster: the thrust `T` it produces right now, in newtons (reconstructed at the hardware
+///     boundary from the measured rotor speed through the effort law `T = k * w^n`);
+///   - angular joint: its current angle `theta_j`, in radians.
+#[derive(Clone)]
 pub struct MotorController {
     model: MotorModel,
     feedback: MotorFeedBack,
@@ -112,6 +156,8 @@ impl Display for MotorController {
 }
 
 impl MotorController {
+    /// Bundle a model, its initial feedback and a PID. The feedback is expected to carry the
+    /// same `id` and `command_type` as the model's family (see `update_motor_feedback`).
     pub fn new(motor_model: MotorModel, motor_fbbk: MotorFeedBack, motor_pid: PIDController) -> Self {
         return Self { model: motor_model, feedback: motor_fbbk, pid: motor_pid }
     }
@@ -317,8 +363,13 @@ impl MotorController {
         return &self.pid;
     }
 
+    /// Replace the feedback with a fresher one - ONLY if it belongs to this motor (same id) and
+    /// speaks the same unit (same `command_type`): a THRUST feedback must never land on a joint.
     pub fn update_motor_feedback(&mut self, motor_feedback: MotorFeedBack) {
-        self.feedback= motor_feedback;
+        if self.feedback.id == motor_feedback.id && 
+                self.feedback.command_type == motor_feedback.command_type {
+            self.feedback= motor_feedback;
+        }
     }
 
     pub fn set_motor_status(&mut self, new_status: MotorStatus) {
@@ -329,8 +380,11 @@ impl MotorController {
         self.model.min_value= motor_min_value;
     }
 
+    /// Set the current effort (N or rad) measured on the hardware / simulator. Non-finite values
+    /// are refused: a NaN here would become the mixer's linearisation point and poison every
+    /// column of the allocation. Out-of-bounds values are accepted but reported.
     pub fn set_motor_current_value(&mut self, new_current_value: f64) {
-        if new_current_value < self.model.min_value || new_current_value > self.model.max_value {
+        if (new_current_value < self.model.min_value || new_current_value > self.model.max_value) && new_current_value > 1e-4{
             println!("[WARNING] -> Motor #{}: current value {} is out of bounds [{}, {}]", self.model.id, new_current_value, self.model.min_value, self.model.max_value);
         }
         if !new_current_value.is_finite() {
@@ -340,6 +394,8 @@ impl MotorController {
         }
     }
 
+    /// Record the effort the mixer just commanded (N or rad). The value is expected to be clamped
+    /// to `[min_value, max_value]` by the caller; a violation is only reported.
     pub fn set_motor_setpoint_value(&mut self, new_setpoint_value: f64) {
         if new_setpoint_value < self.model.min_value || new_setpoint_value > self.model.max_value {
             println!("[WARNING] -> Motor #{}: setpoint value {} is out of bounds [{}, {}]", self.model.id, new_setpoint_value, self.model.min_value, self.model.max_value);
@@ -363,12 +419,23 @@ impl MotorController {
         self.model.relative_location= Some(relative_location);
     }
 
+    /// Speed limit of the motor: rad/s of rotor for a thruster (command ceiling), joint angular
+    /// speed for a joint - in which case it is also the TRUST REGION of the allocation
+    /// (`max_rot_speed * dt` per cycle). Negative values are refused.
     pub fn set_max_rot_speed(&mut self, limit_velocity: f64) {
         if limit_velocity >= 0.0 {        
             self.model.max_rot_speed= limit_velocity;
         } else {
             println!("[WARNING] ->  Unable to update Motor#{} max_rot_speed value because the specified value is negative: {}", self.model.id, limit_velocity);
         }
+    }
+
+    pub fn set_feedback_timestamp(&mut self, timestamp: Timestamp) {
+        self.feedback.timestamp= Some(timestamp);
+    }
+
+    pub fn get_timestamp(&self) -> Option<Timestamp> {
+        return self.feedback.timestamp;
     }
 
     pub fn get_working_axis(&self) -> WorkingAxis {
@@ -378,6 +445,7 @@ impl MotorController {
         return WorkingAxis::Unknown;
     }
 
+    /// Attach a child motor (a motor mounted on this one) in the kinematic tree. Idempotent.
     pub fn add_child(&mut self, child_id: u32) {
         if self.model.child_ids.contains(&child_id) {
             println!("[WARNING] -> Motor #{} already chld of Motor #{}", child_id, self.model.id);

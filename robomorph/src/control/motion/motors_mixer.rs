@@ -1,15 +1,42 @@
+//! Control allocation: given the 6D wrench the vehicle must produce, find the command of every motor
+//! of its kinematic tree. Generic over the vehicle: the tree, the motor families and the geometry are
+//! data (`MotorModel`), the solver is the same for a multirotor, a tilt-rotor or a wheeled rover.
+//!
+//! The THEORY block below is the reference for the notation and the six principles the solver rests
+//! on (incremental formulation, meaning of a column, row normalisation, projected coordinate descent,
+//! bounds as part of the problem, unreachable demands). `docs/src/controle/mixer.md` explains it in
+//! prose with the lessons learnt during validation.
+
 use std::{collections::HashMap, time::Duration};
 
-use nalgebra::{DVector, Matrix6xX, UnitQuaternion, Vector3, Vector6};
+use chrono::Utc;
+use nalgebra::{DVector, Matrix3, Matrix6xX, UnitQuaternion, Vector3, Vector6};
+use prost_types::Timestamp;
+use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::{motion::{motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}, motor_controller::{MotorController, working_axis_i32_to_vec3}}, pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorModel, WorkingAxis, WorkVec}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_controller::{MotorController, working_axis_i32_to_vec3}}}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
+/// The control-allocation stage: turns one 6D wrench setpoint into one command per motor.
+///
+/// Inputs: the motor tree (`motor_config_receiver`, once), the motor feedbacks
+/// (`motor_feedback_receiver`, every tick, published by the Gazebo `joint_state` callback) and the
+/// wrench setpoint (scheduler pipe from the attitude stage). Output: `AnyMessage::MotorCommands`
+/// on `cmd_sender` - efforts in the motor's own unit (N for a thruster, rad for a joint), the
+/// conversion to actuator units happens at the hardware boundary.
+///
+/// The only state besides the motor table is `setpoint`, the last wrench received: it is HELD when
+/// nothing new arrives (zero-order hold), which is what lets the mixer keep flying while the stage
+/// above abstains.
 pub struct MotorsMixer {
     name: String,
-    frame_receiver: Option<tokio::sync::broadcast::Receiver<AnyMessage>>,
-    cmd_sender: Option<tokio::sync::mpsc::Sender<AnyMessage>>,
+    cmd_sender: Option<Sender<AnyMessage>>,
+    motor_config_receiver: Option<Receiver<MotorController>>,
+    motor_feedback_receiver: Option<Receiver<MotorFeedBack>>,
+
     motors: HashMap<u32, MotorController>,
     vehicle_config: VehicleKinematicConfig,
+    period: Duration,
+    setpoint: WorkVec,
 }
 
 impl Process for MotorsMixer {
@@ -17,17 +44,69 @@ impl Process for MotorsMixer {
         self.name= name;
     }
 
-    fn exec(&mut self, inputs: Option<AnyMessage>, dt: std::time::Duration) -> Option<AnyMessage> {
-        todo!()
+    /// One cycle: (1) absorb new motor descriptions, (2) absorb fresh feedbacks (the measured motor
+    /// state is the linearisation point of the solve), (3) take the wrench setpoint from the pipe
+    /// if the previous process handed one over - otherwise keep the last one -, (4) allocate and
+    /// publish the commands. Publishing goes through `cmd_sender` when someone listens, else the
+    /// commands are returned into the pipe.
+    fn exec(&mut self, input: &Option<AnyMessage>, dt: std::time::Duration) -> Option<AnyMessage> {
+        //get the motors being controlled by the mixer
+        if let Some(motor_config_rcvr)= &mut self.motor_config_receiver  {
+            let sz= motor_config_rcvr.len();
+            for _ in 0..sz {
+                if let Ok(motor_controller)= motor_config_rcvr.try_recv() {
+                    self.motors.insert(motor_controller.get_motor_model().id, motor_controller);
+                }
+            }
+        }
+        //get the current
+        if let Some(feedbacks_rcvr)= &mut self.motor_feedback_receiver {
+            let sz= feedbacks_rcvr.len();
+            for _ in 0..sz {
+                if let Ok(motor_feedback)= feedbacks_rcvr.try_recv() {
+                    if let Some(mc)= self.motors.get_mut(&motor_feedback.id) {
+                        mc.update_motor_feedback(motor_feedback);
+                    }
+                }
+            }
+        }
+        if let Some(msg)= input && let AnyMessage::VehicleWrench(setpoint_msg)= msg {
+            self.setpoint= *setpoint_msg;
+        }
+        //compute the motor commands using the motor controllers and the setpoint from previous process or asynchronous receiver
+        let motor_cmds= self.compute_command_law(None, Some(AnyMessage::VehicleWrench(self.setpoint.clone())), dt, false);
+        if let Some(cmds)= motor_cmds {
+            if let Some(cmd_sender)= &mut self.cmd_sender && cmd_sender.receiver_count() > 0{
+                let _= cmd_sender.send(cmds);
+                return None;
+            } else {
+                return Some(cmds);
+            }
+        } else {
+            return None;
+        }
     }
 
-    fn set_inbound_receiver(&mut self, receiver: tokio::sync::broadcast::Receiver<AnyMessage>) {
-        self.frame_receiver= Some(receiver);
+    fn set_receiver(&mut self, _receiver: Receiver<AnyMessage>) {
+        println!("[MotorsMixer:INFO] -> {} don't need input data to compute the motor's command law because it compute current vehicle wrench from controlled motors directly", self.name)
     }
 
-    fn set_outbound_sender(&mut self, sender: tokio::sync::mpsc::Sender<AnyMessage>) {
+    fn set_sender(&mut self, sender: Sender<AnyMessage>) {
         self.cmd_sender= Some(sender);
     }
+    
+    fn set_period_from_freq(&mut self, frequency: u64) {
+        self.period= Duration::from_nanos(1_000_000_000 / frequency);
+    }
+    
+    fn get_period(&self) -> Duration {
+        return self.period;
+    }
+    
+    fn get_name(&self) ->String {
+        return self.name.clone();
+    }
+
 }
 
 // ============================ THEORY OF THE MIXER ============================
@@ -170,234 +249,270 @@ impl MotionController for MotorsMixer {
     //      STEP#3:
     //          Build the control effectiveness matrix(solver) to get the motor commands to apply 
     //          
-    fn compute_command_law(&mut self, input: AnyMessage, setpoint: AnyMessage, dt: Duration) -> AnyMessage {
+    fn compute_command_law(&mut self, _input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, dt: Duration, _verbose: bool)  -> Option<AnyMessage> {
         let mut motors_commands= Vec::new();
-        if let AnyMessage::PoseState(input_pose) = input && 
-                            let AnyMessage::PoseState(pose_setpoint)= setpoint {
-            let mut motor_transforms_map: HashMap<u32, Transform>= HashMap::new();
-            let mut motors_wrench_map= HashMap::new();
-            // the global wrench of the wehicle. Used in the STEP#3 (sum of the root motors wrenches)
-            let mut current_global_work= WorkVec::default();
-            // order the motors so a parent is always processed before its children (depth ascending).
-            // depth is the length of the parent_id chain up to a root (parent_id == 0), so the order stays
-            // correct whatever the HashMap iteration order. Forward = root->leaves (STEP#1), reversed = leaves->root (STEP#2).
-            let mut processing_order: Vec<u32>= self.motors.keys().copied().collect();
-            // the function passed to sort_by_key(...) use keys as input and return a value, used to sort the element
-            // this returned value is like the weight of a key in the list, used to order elements in list 
-            processing_order.sort_by_key(|id| {
-                let mut depth= 0usize;
-                let mut current= *id;
-                while let Some(mc)= self.motors.get(&current) {
-                    if mc.get_motor_model().parent_id == 0 { break; }
-                    current= mc.get_motor_model().parent_id;
-                    depth += 1;
-                    if depth > self.motors.len() { break; } // guard against a malformed cyclic chain
-                }
-                // the ordering criteria
-                depth
-            });
+        let mut setpoint_wrench= self.setpoint;
+        if let Some(msg) = setpoint && let AnyMessage::VehicleWrench(setpoint_msg)= msg {
+            setpoint_wrench= setpoint_msg;
+        }
+        println!("[INFO] -> Setpoint wrench= {:?}", setpoint_wrench);
+        let mut motor_transforms_map: HashMap<u32, Transform>= HashMap::new();
+        let mut motors_wrench_map= HashMap::new();
+        // the global wrench of the wehicle. Used in the STEP#3 (sum of the root motors wrenches)
+        let mut current_global_work= WorkVec::default();
+        // order the motors so a parent is always processed before its children (depth ascending).
+        // depth is the length of the parent_id chain up to a root (parent_id == 0), so the order stays
+        // correct whatever the HashMap iteration order. Forward = root->leaves (STEP#1), reversed = leaves->root (STEP#2).
+        let mut processing_order: Vec<u32>= self.motors.keys().copied().collect();
+        // the function passed to sort_by_key(...) use keys as input and return a value, used to sort the element
+        // this returned value is like the weight of a key in the list, used to order elements in list 
+        processing_order.sort_by_key(|id| {
+            let mut depth= 0usize;
+            let mut current= *id;
+            while let Some(mc)= self.motors.get(&current) {
+                if mc.get_motor_model().parent_id == 0 { break; }
+                current= mc.get_motor_model().parent_id;
+                depth += 1;
+                if depth > self.motors.len() { break; } // guard against a malformed cyclic chain
+            }
+            // the ordering criteria
+            depth
+        });
             
-            //STEP#1:
-            //      Compute the current motor transform based on the potential parent motor, for each motor (parents first)
-            motor_transforms_map= self.compute_motor_transforms(&processing_order);
-            // the thruster effectivness mat (Used in STEP#3)
-            // it map, the dimension were the vehicle can produce force, thanks to all these motors, given their transform (location / orientation)
-            let mut effectivness_mat= Matrix6xX::zeros(self.motors.len());
+        //STEP#1:
+        //      Compute the current motor transform based on the potential parent motor, for each motor (parents first)
+        motor_transforms_map= self.compute_motor_transforms(&processing_order);
+        // the thruster effectivness mat (Used in STEP#3)
+        // it map, the dimension were the vehicle can produce force, thanks to all these motors, given their transform (location / orientation)
+        let mut effectivness_mat= Matrix6xX::zeros(self.motors.len());
 
-            //STEP#2:
-            //      Compute each motor's wrench column (thruster) or wrench gradient (angular joint),
-            //      traversing leaves -> root: an angular joint's gradient is built from its children's
-            //      already-resolved wrenches, so children must be computed first (reverse of STEP#1).
-            // Snapshot of every motor model, so a joint can look up its children's geometry by id.
-            let motor_models_map: HashMap<u32, MotorModel>= self.motors.iter()
+        //STEP#2:
+        //      Compute each motor's wrench column (thruster) or wrench gradient (angular joint),
+        //      traversing leaves -> root: an angular joint's gradient is built from its children's
+        //      already-resolved wrenches, so children must be computed first (reverse of STEP#1).
+        // Snapshot of every motor model, so a joint can look up its children's geometry by id.
+        let motor_models_map: HashMap<u32, MotorModel>= self.motors.iter()
                                                         .map(|(id, mc)| (*id, mc.get_motor_model().clone()))
                                                         .collect();
-            // now i is used to fill the effectivness matrix with the effectivness vector of each thrusters
-            let mut i= 0;
-            for motor_id in processing_order.iter().rev() {
-                if let Some(motor_controller)= self.motors.get(motor_id) {
-                    println!("Motor #{}: parent_id= {}, child_ids= {:?}, min_value= {:?}, max_value= {:?}", motor_controller.get_motor_model().id, motor_controller.get_motor_model().parent_id, motor_controller.get_motor_model().child_ids, motor_controller.get_motor_model().min_value, motor_controller.get_motor_model().max_value);
-                    // get the parent_transform from the motor_transforms_map computed in STEP#1 None for a root motor.
-                    let (output_vec, output_wrench)= motor_controller.compute_motor_efforts(&motor_transforms_map, &motors_wrench_map, &motor_models_map);
-                    //IF it's a root motor, add it's wrench to the current vehicle wrench
-                    //the current wrecnh of the vehicle is the sum of the root motors wrenches
-                    if motor_controller.get_motor_model().parent_id == 0 {
-                        current_global_work += output_wrench;
-                    }
-                    motors_wrench_map.insert(*motor_id, output_wrench);
-                    // row normalisation (theory 3): the column is turned into "acceleration produced per
-                    // unit of command". Forces / m, moment of axis k / sqrt(m * I_k). Without it the
-                    // least squares would compare newtons to newton-metres and the arbitration between
-                    // holding the attitude and holding the force would depend on the choice of length unit.
-                    let normalized_output_vec= Vector6::new(output_vec[0] / self.vehicle_config.weight,
-                                                                                                output_vec[1] / self.vehicle_config.weight, 
-                                                                                                output_vec[2] / self.vehicle_config.weight, 
-                                                                                                output_vec[3] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[0][0]),
-                                                                                                output_vec[4] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[1][1]),
-                                                                                                output_vec[5] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[2][2]),);
-                    effectivness_mat.set_column(i, &Vector6::new(normalized_output_vec[0], normalized_output_vec[1], normalized_output_vec[2], 
-                                                                            normalized_output_vec[3], normalized_output_vec[4], normalized_output_vec[5]));
-                } 
-                i+= 1;
-            }
-
-            println!("[INFO] -> Current vehicle wrench: {:?}", Vector6::from(current_global_work));
-        
-            //STEP#3:
-            let mut additionnal_works= HashMap::new();
-            let mut motor_work_steps= HashMap::new();
-            //      per column step (theory 4): 1 / ||a_j||^2 is the EXACT minimiser of the residual
-            //      along column j. Because it is per column, the solver becomes invariant to the unit
-            //      each motor is commanded in - a single global step would be dictated by the largest
-            //      column and would leave the smallest ones almost frozen.
-            i= 0;
-            for motor_id in processing_order.iter().rev() {
-                let mut accum= 0.0;
-                for ele in effectivness_mat.column(i).iter() {
-                    accum +=(ele * ele);
+        // now i is used to fill the effectivness matrix with the effectivness vector of each thrusters
+        let mut i= 0;
+        let mut max_norm= 0.0;
+        for motor_id in processing_order.iter().rev() {
+            if let Some(motor_controller)= self.motors.get(motor_id) {
+                println!("Motor #{}: parent_id= {}, child_ids= {:?}, min_value= {:?}, max_value= {:?}", motor_controller.get_motor_model().id, motor_controller.get_motor_model().parent_id, motor_controller.get_motor_model().child_ids, motor_controller.get_motor_model().min_value, motor_controller.get_motor_model().max_value);
+                // get the parent_transform from the motor_transforms_map computed in STEP#1 None for a root motor.
+                let (output_vec, output_wrench)= motor_controller.compute_motor_efforts(&motor_transforms_map, &motors_wrench_map, &motor_models_map);
+                //IF it's a root motor, add it's wrench to the current vehicle wrench
+                //the current wrecnh of the vehicle is the sum of the root motors wrenches
+                if motor_controller.get_motor_model().parent_id == 0 {
+                    current_global_work += output_wrench;
                 }
-                let step= 1.0 / accum;
-                if step.is_finite() {
-                    motor_work_steps.insert(*motor_id, step);
-                } else {
-                    // zero column: this motor has no effect on the wrench at the current operating point
-                    // (typically a joint whose child produces no thrust). It simply sits out this cycle.
-                    motor_work_steps.insert(*motor_id, 0.0);
-                }
-                i+= 1;
-            }
-            for motor_id in processing_order.iter().rev() {
-                if let Some(_) = self.motors.get(motor_id) {
-                    additionnal_works.insert(*motor_id, 0.0);
-                }
-            }
-            let wrench_setpoint= self.compute_wrench_setpoint(input_pose, pose_setpoint);
-            println!("[INFO] -> Wrench Setpoint: {:?}", Vector6::from(wrench_setpoint));
-            // the target of the solve is the wrench that is MISSING, not the wrench that is wanted
-            // (theory 1): the motors already produce current_global_work, so only the difference has to
-            // be allocated. Same row normalisation as the columns - the two sides of A.dx ~= b must be
-            // expressed in the same units, otherwise the scores are meaningless.
-            let mut delta_wrench= wrench_setpoint - current_global_work;
-            delta_wrench.fx /= self.vehicle_config.weight;
-            delta_wrench.fy /= self.vehicle_config.weight;
-            delta_wrench.fz /= self.vehicle_config.weight;
-            delta_wrench.mx /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[0][0]);
-            delta_wrench.my /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[1][1]);
-            delta_wrench.mz /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[2][2]);
-                
-            println!("[INFO] -> Execution of BVLS to find the best motor works combinaison to reach the setpoint");
-            //if let Ok(base_thrusts)= svd.solve(&Vector6::from(wrench_setpoint), 1e-3 * svd.singular_values.max()) {
-            
-            let mut prev_wrench_norm= Vector6::from(delta_wrench).norm();
-            for s in 0..10 {
-                //remaining_wrench = delta_wrench − effectivness_mat * x
-                let mut current_commands= DVector::zeros(processing_order.len());
-                let mut j= 0;
-                //build the motor increment commands vector, used to compute the remaining wrench to reach the setpoint
-                for motor_id in processing_order.iter().rev() {
-                    if let Some(additional_work) = additionnal_works.get(motor_id) {
-                        current_commands[j]= *additional_work;
-                    }
-                    j+= 1;
-                }
-                let mut idx= 0;
-                let mut wrench_norm= 0.0;
-                // one sweep of projected coordinate descent (theory 4). The residual is recomputed
-                // INSIDE this loop, so each motor sees what the previous ones have already corrected.
-                // Refreshing it only once per sweep would make correlated columns - here the two rotors,
-                // which both push mostly along +z - correct the same error twice and overshoot.
-                for motor_id in processing_order.iter().rev() {
-                    let remaining_wrench= Vector6::from(delta_wrench) - &effectivness_mat * &current_commands;
-                    println!("[INFO] -> Remaining wrench to reach the setpoint: {:?}", remaining_wrench);
-                    // score of a motor = a_j . r, how much of what is still missing this motor can
-                    // produce. Sign included: a negative score means the motor must back off.
-                    let motor_scores= effectivness_mat.transpose() * remaining_wrench;
-                    if let Some(additional_work) = additionnal_works.get_mut(motor_id) && motor_scores.len() > idx &&
-                            let Some(mc) = self.motors.get(motor_id) && let Some(motor_work_step) = motor_work_steps.get(motor_id) {
-                        // exact coordinate step: score / ||a_j||^2 is the amount that minimises the
-                        // residual along this column alone (theory 4)
-                        *additional_work += motor_scores[idx] * motor_work_step;
-                        let current_value= f64::clamp(mc.get_motor_feedback().current_value, mc.get_motor_model().min_value, mc.get_motor_model().max_value);
-                        // projection on the feasible box (theory 5). Bounds are on the RESULT
-                        // current_value + increment, hence the shift by current_value.
-                        if mc.get_motor_model().working_axis >= WorkingAxis::LinearMotionALongX as i32 {
-                            // thruster: physical bounds only. Its column is exact whatever the increment,
-                            // so no trust region is needed. min_value is not zero on purpose: a joint
-                            // borrows its authority from its child's thrust (theory 2), so letting a
-                            // rotor stop would silently remove the arm from the allocation.
-                            *additional_work= additional_work.clamp(mc.get_motor_model().min_value - current_value,
-                                                                    mc.get_motor_model().max_value - current_value);
-                        } else {
-                            // angular joint: physical bounds INTERSECTED with the trust region
-                            // max_rot_speed * dt, what the joint can actually travel in one cycle.
-                            // Its column is a tangent (theory 2): beyond a small angle it stops
-                            // describing reality, so the increment must stay small enough for the
-                            // linearisation to hold. The joint speed is a hardware spec, not a gain.
-                            *additional_work= additional_work.clamp(f64::max(mc.get_motor_model().min_value - current_value, -mc.get_motor_model().max_rot_speed * dt.as_secs_f64()),
-                                                                f64::min(mc.get_motor_model().max_value - current_value, mc.get_motor_model().max_rot_speed * dt.as_secs_f64()));
-                        }
-                        current_commands[idx]= *additional_work
-                    }
-                    idx+= 1;
-                }
-                // convergence is judged on the RELATIVE improvement, never on an absolute threshold:
-                // part of the residual is structurally unreachable (theory 6) and never goes away, so
-                // the norm converges to that floor, not to zero. When the sweep stops improving, the
-                // solver has extracted everything the motors can give.
-                wrench_norm= (Vector6::from(delta_wrench) - &effectivness_mat * &current_commands).norm();
-                if (prev_wrench_norm - wrench_norm) / prev_wrench_norm < 0.1 {
-                    break;  
-                } else {
-                    prev_wrench_norm= wrench_norm;
-                    if s == 9 {
-                        println!("[WARNING] -> BVLS did not converge after {} iterations. Remaining wrench norm: {}", s + 1, wrench_norm);
-                    }
-                }
-            }
-
-            for id in processing_order {
-                let motor_id= id as u32;
-                if let Some(motor_work_step) = motor_work_steps.get(&motor_id) {
-                    println!("[INFO] -> Motor #{} with work_step= {}: additional work to reach the setpoint: {:?}", motor_id, motor_work_step, additionnal_works.get(&motor_id));
-                }
-                if let Some(motor_controller) = self.motors.get_mut(&motor_id) && let Some(additional_work) = additionnal_works.get(&motor_id) {
-                    motor_controller.set_motor_setpoint_value(f64::clamp(motor_controller.get_motor_feedback().current_value + additional_work, motor_controller.get_motor_model().min_value, motor_controller.get_motor_model().max_value));
-                    println!("[INFO] -> Command for Motor #{}: type= {}, setpoint= {}", motor_id, motor_controller.get_motor_model().working_axis, motor_controller.get_motor_feedback().setpoint_value);
-                    if motor_controller.get_motor_model().working_axis >= WorkingAxis::LinearMotionALongX as i32 {
-                        motors_commands.push(MotorCommand { id: motor_id, command_type: MotorCommandType::THRUST as i32, setpoint_value: motor_controller.get_motor_feedback().setpoint_value });
-                    } else {
-                        motors_commands.push(MotorCommand { id: motor_id, command_type: MotorCommandType::ANGULARPOSITION as i32, setpoint_value: motor_controller.get_motor_feedback().setpoint_value });
-                    }
-                }
+                motors_wrench_map.insert(*motor_id, output_wrench);
+                // row normalisation (theory 3): the column is turned into "acceleration produced per
+                // unit of command". Forces / m, moment of axis k / sqrt(m * I_k). Without it the
+                // least squares would compare newtons to newton-metres and the arbitration between
+                // holding the attitude and holding the force would depend on the choice of length unit.
+                let normalized_output_vec= Vector6::new(output_vec[0] / self.vehicle_config.weight,
+                                                                                            output_vec[1] / self.vehicle_config.weight, 
+                                                                                            output_vec[2] / self.vehicle_config.weight, 
+                                                                                            output_vec[3] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(0, 0)]),
+                                                                                            output_vec[4] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(1, 1)]),
+                                                                                            output_vec[5] / f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(2, 2)]),);
+                effectivness_mat.set_column(i, &Vector6::new(normalized_output_vec[0], normalized_output_vec[1], normalized_output_vec[2], 
+                                                                        normalized_output_vec[3], normalized_output_vec[4], normalized_output_vec[5]));
+                max_norm= f64::max(max_norm, effectivness_mat.column(i).norm());
             } 
+            i+= 1;
         }
-        return AnyMessage::MotorCommands(motors_commands);
-    }
 
-    fn send_motor_command(&self) {
-        todo!()
+        println!("[INFO] -> Current vehicle wrench: {:?}", Vector6::from(current_global_work));
+        
+        //STEP#3:
+        let mut additionnal_works= HashMap::new();
+        let mut motor_work_steps= HashMap::new();
+        //      per column step (theory 4): 1 / ||a_j||^2 is the EXACT minimiser of the residual
+        //      along column j. Because it is per column, the solver becomes invariant to the unit
+        //      each motor is commanded in - a single global step would be dictated by the largest
+        //      column and would leave the smallest ones almost frozen.
+        i= 0;
+        for motor_id in processing_order.iter().rev() {
+            let mut accum= 0.0;
+            for ele in effectivness_mat.column(i).iter() {
+                accum += ele * ele;
+            }
+            let step= 1.0 / accum;
+            // RELATIVE guard on top of the exact-zero one: a column that is tiny but not zero (a joint
+            // whose child rotor has just started spinning) gives an astronomic step (1e117 observed),
+            // and any 1e-17 residual noise then saturates its increment at the trust region. It once
+            // flicked the arms by +/-5 deg at every take-off, kicking the roll by ~1 rad/s. Such a
+            // motor sits out exactly like an exactly-zero column.
+            if step.is_finite() && effectivness_mat.column(i).norm() > 1e-6 * max_norm {
+                motor_work_steps.insert(*motor_id, step);
+            } else {
+                // zero column: this motor has no effect on the wrench at the current operating point
+                // (typically a joint whose child produces no thrust). It simply sits out this cycle.
+                motor_work_steps.insert(*motor_id, 0.0);
+            }
+            i+= 1;
+        }
+        for motor_id in processing_order.iter().rev() {
+            if let Some(_) = self.motors.get(motor_id) {
+                additionnal_works.insert(*motor_id, 0.0);
+            }
+        }
+        println!("[INFO] -> Wrench Setpoint: {:?}", Vector6::from(setpoint_wrench));
+        // the target of the solve is the wrench that is MISSING, not the wrench that is wanted
+        // (theory 1): the motors already produce current_global_work, so only the difference has to
+        // be allocated. Same row normalisation as the columns - the two sides of A.dx ~= b must be
+        // expressed in the same units, otherwise the scores are meaningless.
+        let mut delta_wrench= setpoint_wrench - current_global_work;
+        delta_wrench.fx /= self.vehicle_config.weight;
+        delta_wrench.fy /= self.vehicle_config.weight;
+        delta_wrench.fz /= self.vehicle_config.weight;
+        delta_wrench.mx /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(0, 0)]);
+        delta_wrench.my /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(1, 1)]);
+        delta_wrench.mz /= f64::sqrt(self.vehicle_config.weight * self.vehicle_config.moments_matrix[(2, 2)]);
+            
+        println!("[INFO] -> Execution of BVLS to find the best motor works combinaison to reach the setpoint");
+        //if let Ok(base_thrusts)= svd.solve(&Vector6::from(wrench_setpoint), 1e-3 * svd.singular_values.max()) {
+            
+        let mut prev_wrench_norm= Vector6::from(delta_wrench).norm();
+        for s in 0..10 {
+            //remaining_wrench = delta_wrench − effectivness_mat * x
+            let mut current_commands= DVector::zeros(processing_order.len());
+            let mut j= 0;
+            //build the motor increment commands vector, used to compute the remaining wrench to reach the setpoint
+            for motor_id in processing_order.iter().rev() {
+                if let Some(additional_work) = additionnal_works.get(motor_id) {
+                    current_commands[j]= *additional_work;
+                }
+                j+= 1;
+            }
+            let mut idx= 0;
+            let mut wrench_norm= 0.0;
+            // one sweep of projected coordinate descent (theory 4). The residual is recomputed
+            // INSIDE this loop, so each motor sees what the previous ones have already corrected.
+            // Refreshing it only once per sweep would make correlated columns - here the two rotors,
+            // which both push mostly along +z - correct the same error twice and overshoot.
+            for motor_id in processing_order.iter().rev() {
+                let remaining_wrench= Vector6::from(delta_wrench) - &effectivness_mat * &current_commands;
+                println!("[INFO] -> Remaining wrench to reach the setpoint: {:?}", remaining_wrench);
+                // score of a motor = a_j . r, how much of what is still missing this motor can
+                // produce. Sign included: a negative score means the motor must back off.
+                let motor_scores= effectivness_mat.transpose() * remaining_wrench;
+                if let Some(additional_work) = additionnal_works.get_mut(motor_id) && motor_scores.len() > idx &&
+                        let Some(mc) = self.motors.get(motor_id) && let Some(motor_work_step) = motor_work_steps.get(motor_id) {
+                    // exact coordinate step: score / ||a_j||^2 is the amount that minimises the
+                    // residual along this column alone (theory 4)
+                    *additional_work += motor_scores[idx] * motor_work_step;
+                    let current_value= f64::clamp(mc.get_motor_feedback().current_value, mc.get_motor_model().min_value, mc.get_motor_model().max_value);
+                    // projection on the feasible box (theory 5). Bounds are on the RESULT
+                    // current_value + increment, hence the shift by current_value.
+                    if mc.get_motor_model().working_axis >= WorkingAxis::LinearMotionALongX as i32 {
+                        // thruster: physical bounds only. Its column is exact whatever the increment,
+                        // so no trust region is needed. min_value is not zero on purpose: a joint
+                        // borrows its authority from its child's thrust (theory 2), so letting a
+                        // rotor stop would silently remove the arm from the allocation.
+                        *additional_work= additional_work.clamp(mc.get_motor_model().min_value - current_value,
+                                                                mc.get_motor_model().max_value - current_value);
+                    } else {
+                        // angular joint: physical bounds INTERSECTED with the trust region
+                        // max_rot_speed * dt, what the joint can actually travel in one cycle.
+                        // Its column is a tangent (theory 2): beyond a small angle it stops
+                        // describing reality, so the increment must stay small enough for the
+                        // linearisation to hold. The joint speed is a hardware spec, not a gain.
+                        *additional_work= additional_work.clamp(f64::max(mc.get_motor_model().min_value - current_value, -mc.get_motor_model().max_rot_speed * dt.as_secs_f64()),
+                                                                f64::min(mc.get_motor_model().max_value - current_value, mc.get_motor_model().max_rot_speed * dt.as_secs_f64()));
+                    }
+                    current_commands[idx]= *additional_work
+                }
+                idx+= 1;
+            }
+            // convergence is judged on the RELATIVE improvement, never on an absolute threshold:
+            // part of the residual is structurally unreachable (theory 6) and never goes away, so
+            // the norm converges to that floor, not to zero. When the sweep stops improving, the
+            // solver has extracted everything the motors can give.
+            wrench_norm= (Vector6::from(delta_wrench) - &effectivness_mat * &current_commands).norm();
+            // NOTE: this criterion is measured on the TOTAL residual, which includes the structurally
+            // unreachable part (theory 6). As soon as the vehicle is tilted, the unreachable `fy` of the
+            // gravity feedforward dominates the norm and never moves, so the relative improvement of the
+            // first sweep looks negligible and the solver exits after ONE sweep (vs 9-10 when level),
+            // leaving reachable moments under-served. The least-squares optimality condition is
+            // A^T r = 0, not r = 0, and the unreachable part lies in the null space of A^T: judging
+            // convergence on ||A^T r|| (the `motor_scores` vector, already computed) would remove the
+            // unreachable part from the criterion automatically.
+            if (prev_wrench_norm - wrench_norm) / prev_wrench_norm < 0.1 {
+                break;  
+            } else {
+                prev_wrench_norm= wrench_norm;
+                if s == 9 {
+                    println!("[WARNING] -> BVLS did not converge after {} iterations. Remaining wrench norm: {}", s + 1, wrench_norm);
+                }
+            }
+        }
+        let now= Timestamp {
+            seconds: Utc::now().timestamp(),
+            nanos: Utc::now().timestamp_subsec_nanos() as i32,
+        };
+        for id in processing_order {
+            let motor_id= id as u32;
+            if let Some(motor_work_step) = motor_work_steps.get(&motor_id) {
+                println!("[INFO] -> Motor #{} with work_step= {}: additional work to reach the setpoint: {:?}", motor_id, motor_work_step, additionnal_works.get(&motor_id));
+            }
+            if let Some(motor_controller) = self.motors.get_mut(&motor_id) && let Some(additional_work) = additionnal_works.get(&motor_id) {
+                motor_controller.set_motor_setpoint_value(f64::clamp(motor_controller.get_motor_feedback().current_value + additional_work, motor_controller.get_motor_model().min_value, motor_controller.get_motor_model().max_value));
+                println!("[INFO] -> Command for Motor #{}: type= {}, setpoint= {}", motor_id, motor_controller.get_motor_model().working_axis, motor_controller.get_motor_feedback().setpoint_value);
+                if motor_controller.get_motor_model().working_axis >= WorkingAxis::LinearMotionALongX as i32 {
+                    motors_commands.push(MotorCommand {timestamp: Some(now), id: motor_id, command_type: MotorCommandType::THRUST as i32, setpoint_value: motor_controller.get_motor_feedback().setpoint_value });
+                } else {
+                    motors_commands.push(MotorCommand {timestamp: Some(now), id: motor_id, command_type: MotorCommandType::ANGULARPOSITION as i32, setpoint_value: motor_controller.get_motor_feedback().setpoint_value });
+                }
+            }
+        } 
+        return Some(AnyMessage::MotorCommands(motors_commands));
     }
     
-    fn add_or_update_motor(&mut self, new_motor: MotorController) {
-        let motor_description= new_motor.to_string();
-
-        let motor_id= new_motor.get_motor_model().id;
-        if self.motors.insert(motor_id, new_motor).is_none() {
-            println!("[INFO] -> Add motor {}", motor_description);
-        } else {
-            println!("[INFO] -> Motor with id= {} already exist. Motor {} updated", motor_id, motor_description);
-        }
+    fn set_setpoint_receiver(&mut self, _receiver: Receiver<Pose>) {
+        println!("[MotorsMixer:INFO] -> this Controller don't receive any external setpoints")
     }
 }
 
 impl MotorsMixer {
+    /// Mixer with a placeholder vehicle (unit mass, zero inertia): only for wiring tests, the row
+    /// normalisation divides by the inertia and needs the real config (`new`).
     pub fn new_default(name: String) -> Self {
         return Self { name, vehicle_config: VehicleKinematicConfig { error_linear_factor: 1.0, error_angular_factor: 1.0, error_attitude_factor: 1.0,
-                                                                        weight: 1.0, com_relative_location: Vec3::default(), moments_matrix: [[0.0; 3]; 3]},
-                        frame_receiver: None, cmd_sender: None, motors: HashMap::new()};
+                                                                        weight: 1.0, com_relative_location: Vec3::default(), moments_matrix: Matrix3::zeros(),
+                                                                    },
+                        cmd_sender: None,
+                        motors: HashMap::new(), period: Duration::from_millis(0),
+                        setpoint: WorkVec { fx: 0.0, fy: 0.0, fz: 0.0, mx: 0.0, my: 0.0, mz: 0.0 },
+                        motor_config_receiver: None,
+                        motor_feedback_receiver: None,
+                    };
     }
-    pub fn new(name: String, vehicle_config: VehicleKinematicConfig, pid: PIDController) -> Self {
-        return Self { name, vehicle_config, frame_receiver: None, cmd_sender: None, motors: HashMap::new()};
+    /// Mixer for a given vehicle. The motor tree is not passed here: it arrives through the
+    /// configuration channel (`set_motor_config_receiver`) once the hardware / simulator has
+    /// discovered it.
+    pub fn new(name: String, vehicle_config: VehicleKinematicConfig) -> Self {
+        return Self { name, vehicle_config, cmd_sender: None,
+                        motors: HashMap::new(), period: Duration::from_millis(0),
+                        setpoint: WorkVec { fx: 0.0, fy: 0.0, fz: 0.0, mx: 0.0, my: 0.0, mz: 0.0 },
+                        motor_config_receiver: None,
+                        motor_feedback_receiver: None,
+                    };
+    }
+
+    /// Channel on which the vehicle controller publishes the motor tree (one `MotorController`
+    /// per motor, ids resolved, parents and children linked).
+    pub fn set_motor_config_receiver(&mut self, motor_config_receiver: Receiver<MotorController>) {
+        self.motor_config_receiver= Some(motor_config_receiver);
+    }
+
+    /// Channel on which the vehicle controller publishes the measured motor state (thrust in N /
+    /// angle in rad) - the linearisation point of every solve.
+    pub fn set_motor_feedback_receiver(&mut self, motor_feedback_receiver: Receiver<MotorFeedBack>) {
+        self.motor_feedback_receiver= Some(motor_feedback_receiver);
     }
 
     /// Resolve every motor's absolute transform in the body frame.
@@ -500,10 +615,19 @@ impl MotorsMixer {
         return motor_transforms;
     }
 
-    fn compute_lin_motor_thrusts(&self) -> Vec<MotorCommand> {
-        return vec![];
+    /// Insert or replace a motor in the table by id (alternative to the configuration channel).
+    pub fn add_or_update_motor(&mut self, new_motor: MotorController) {
+        let motor_description= new_motor.to_string();
+
+        let motor_id= new_motor.get_motor_model().id;
+        if self.motors.insert(motor_id, new_motor).is_none() {
+            println!("[INFO] -> Add motor {}", motor_description);
+        } else {
+            println!("[INFO] -> Motor with id= {} already exist. Motor {} updated", motor_id, motor_description);
+        }
     }
 
+    /// Replace the vehicle description (mass, inertia, CoM) used by the row normalisation.
     pub fn set_vehicle_config(&mut self, vehicle_config: VehicleKinematicConfig) {
         self.vehicle_config= vehicle_config;
     }
@@ -514,43 +638,6 @@ impl MotorsMixer {
 
     pub fn get_motors_mut(&mut self) -> &mut HashMap<u32, MotorController> {
         return &mut self.motors;
-    }
-    
-    fn compute_wrench_setpoint(&self, input_pose: Pose, pose_setpoint: Pose) -> WorkVec {
-        let mut thrust_force_setpoint= Vector3::default();
-        let mut moments_setpoint= Vector3::default();
-        if let Some(orientation_setpoint)= pose_setpoint.orientation && let Some(current_orientation)= input_pose.orientation {
-            //thrust setpoint force computation:
-            //      F_setpoint= rot_g + k_lin * (lin_vel_s - c_lin_vel)
-            //          rot_g= q_mes * (0.0, 0.0, m*g)
-            //              q_mes= vehicle orientation
-            //              k_lin= error_lin_factor. Used to set the controller behavior relative to the linear velocity error by set the constant time of the 
-            //                      linear velocity control
-            //              lin_vel_s= linear velocity setpoint, from the pose setpoint
-            //              c_lin_vel= current linear velocity, from the current pose
-            let rotated_gravity= UnitQuaternion::from(current_orientation).inverse() * 
-                                                                        Vector3::new(0.0, 0.0, self.vehicle_config.weight * GRAVITY);
-            let mut lin_vel_error= Vector3::zeros();
-            if let Some(lin_vel_setpoint)= pose_setpoint.l_velocity && let Some(current_lin_vel)= input_pose.l_velocity {
-                lin_vel_error= Vector3::from(lin_vel_setpoint - current_lin_vel);
-            }
-            thrust_force_setpoint= rotated_gravity + self.vehicle_config.error_linear_factor * lin_vel_error;
-            //moments setpoint computation:
-            //      M_setpoint= k_att*e_att + k_ang*(ω_setpoint − ω_mes)
-            //          e_att= axis_angle(q_mes ⊗ q_setpoint)
-
-            // for the attitude error, the rotation vector is retrieve by the remaining rotation from the current orientation to reach the setpoint orientation
-            // to model that we get the axis angle rotation vector from the quaternion product
-            let attitude_error= (UnitQuaternion::from(current_orientation).inverse() * UnitQuaternion::from(orientation_setpoint)).scaled_axis();
-            let mut ang_vel_error= Vector3::zeros();
-            if let Some(imu_setpoint)= pose_setpoint.imu_measurement && let Some(ang_vel_setpoint)= imu_setpoint.a_velocity &&
-                    let Some(imu)= input_pose.imu_measurement && let Some(current_ang_vel)= imu.a_velocity {
-                ang_vel_error= Vector3::from(ang_vel_setpoint - current_ang_vel);
-            }
-            moments_setpoint= self.vehicle_config.error_attitude_factor * attitude_error + self.vehicle_config.error_angular_factor * (ang_vel_error)
-        }
-        return WorkVec { fx: thrust_force_setpoint.x, fy: thrust_force_setpoint.y, fz: thrust_force_setpoint.z, 
-                            mx: moments_setpoint.x, my: moments_setpoint.y, mz: moments_setpoint.z }
     }
 }
 
