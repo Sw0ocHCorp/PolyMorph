@@ -142,15 +142,14 @@ pub fn working_axis_i32_to_vec3(axis: i32) -> UnitVector3<f64> {
 pub struct MotorController {
     model: MotorModel,
     feedback: MotorFeedBack,
-    pid: PIDController,
 }
 
 impl Display for MotorController {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return write!(
             f,
-            "MotorController {{\n  .model= {:?}\n  .feedback= {:?}\n  .pid= {:?}\n}}",
-            self.model, self.feedback, self.pid,
+            "MotorController {{\n  .model= {:?}\n  .feedback= {:?}\n}}",
+            self.model, self.feedback,
         );
     }
 }
@@ -158,8 +157,8 @@ impl Display for MotorController {
 impl MotorController {
     /// Bundle a model, its initial feedback and a PID. The feedback is expected to carry the
     /// same `id` and `command_type` as the model's family (see `update_motor_feedback`).
-    pub fn new(motor_model: MotorModel, motor_fbbk: MotorFeedBack, motor_pid: PIDController) -> Self {
-        return Self { model: motor_model, feedback: motor_fbbk, pid: motor_pid }
+    pub fn new(motor_model: MotorModel, motor_fbbk: MotorFeedBack) -> Self {
+        return Self { model: motor_model, feedback: motor_fbbk }
     }
 
 
@@ -357,10 +356,6 @@ impl MotorController {
 
     pub fn get_motor_feedback(&self) -> &MotorFeedBack {
         return &self.feedback;
-    }
-
-    pub fn get_motor_pid(&self) -> &PIDController {
-        return &self.pid;
     }
 
     /// Replace the feedback with a fresher one - ONLY if it belongs to this motor (same id) and

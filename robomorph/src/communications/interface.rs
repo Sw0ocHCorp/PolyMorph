@@ -67,5 +67,6 @@ pub fn encode_frame(msg: &AnyMessage) -> Vec<u8> {
         AnyMessage::MotorCommands(m) => return vec![],
         AnyMessage::VehicleWrench(work_vec) => return vec![],
         AnyMessage::RemoteControl(m) => {return m.to_frame()},
+        _ => return vec![],
     }
 }

@@ -6,12 +6,14 @@
 //! Wire frame layout (see `communications::interface`): `[MessageType as u8][protobuf bytes]`.
 
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use std::time::Duration;
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use prost::bytes::{Buf, BufMut};
 use prost::encoding::{double, skip_field, DecodeContext, WireType};
 use prost::{DecodeError, Message};
 use crate::control::joystick::joystick_controller::RemoteControl;
+use crate::control::pid_controller::PIDValue;
 use crate::messages::motor_messages::WorkVec;
 use crate::messages::{lidar_messages::LidarMeasurements, motor_messages::{MotorCommand, MotorFeedBack}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}};
 
@@ -72,7 +74,8 @@ pub enum AnyMessage {
     /// One lidar sweep.
     LidarState(LidarMeasurements),
     /// Snapshot of the gamepad events seen during one `XboxPadControl` tick.
-    RemoteControl(RemoteControl)
+    RemoteControl(RemoteControl),
+    ForceVec(Vec3)
 }
 
 /// Protobuf wire form of `nalgebra::Vector3<f64>`. It *contains* a real `Vector3`, so every nalgebra
@@ -115,6 +118,44 @@ impl From<Vector3<f64>> for Vec3 {
 impl From<Vec3> for Vector3<f64> {
     fn from(v: Vec3) -> Self {
         return v.0;
+    }
+}
+
+impl PIDValue for Vec3 {
+    fn error_from(&self, setpoint: Self) -> Self {
+        return Vec3::new(setpoint.x - self.x, 
+                            setpoint.y - self.y, 
+                            setpoint.z - self.z);
+    }
+
+    fn compute_p(&self, setpoint: Self, k_p: f64) -> Self {
+        return Vec3::new((setpoint.x - self.x) * k_p, 
+                            (setpoint.y - self.y) * k_p, 
+                            (setpoint.z - self.z) * k_p);
+    }
+
+    fn compute_i(&mut self, error: Self, max_accum_error: f64, k_i: f64, dt: Duration) -> Self {
+        let new_integrated_error= Vec3::new(self.x + error.x * dt.as_secs_f64(), 
+                                            self.y + error.y * dt.as_secs_f64(), 
+                                            self.z + error.z * dt.as_secs_f64());
+        //clamp the integrated error to avoid windup
+        let clamped_integrated_error= Vec3::new(new_integrated_error.x.clamp(-max_accum_error, max_accum_error),
+                                                new_integrated_error.y.clamp(-max_accum_error, max_accum_error),
+                                                new_integrated_error.z.clamp(-max_accum_error, max_accum_error));
+        *self= clamped_integrated_error;
+        return Vec3::new(clamped_integrated_error.x * k_i, 
+                            clamped_integrated_error.y * k_i, 
+                            clamped_integrated_error.z * k_i);
+    }
+
+    fn compute_d(&self, setpoint: Self, prev_error: Self, k_d: f64, dt: Duration) -> Self {
+        let error= self.error_from(setpoint);
+        let derivative= Vec3::new((error.x - prev_error.x) / dt.as_secs_f64(), 
+                                    (error.y - prev_error.y) / dt.as_secs_f64(), 
+                                    (error.z - prev_error.z) / dt.as_secs_f64());
+        return Vec3::new(derivative.x * k_d, 
+                            derivative.y * k_d, 
+                            derivative.z * k_d);
     }
 }
 
@@ -232,6 +273,15 @@ impl Message for UnitQuat {
 
     fn clear(&mut self) {
         *self = Self::default();
+    }
+}
+
+impl Mul<Vec3> for UnitQuat {
+    type Output = Vec3;
+
+    fn mul(self, rhs: Vec3) -> Vec3 {
+        let q: UnitQuaternion<f64> = self.into();
+        Vec3::from(q * rhs.0)
     }
 }
 

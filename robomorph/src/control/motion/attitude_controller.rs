@@ -99,7 +99,7 @@ impl Process for AttitudeController {
             }
         }
         let wrench_setpoint= self.compute_command_law(Some(AnyMessage::PoseState(current_pose)), 
-                                                            Some(AnyMessage::PoseState(self.setpoint.clone())), dt, true);
+                                                            Some(AnyMessage::PoseState(self.setpoint.clone())), dt, false);
         if let Some(setpoint)= wrench_setpoint {
             if let Some(wrench_sender)= &mut self.wrench_sender && 
                         wrench_sender.receiver_count() > 0{
@@ -111,15 +111,6 @@ impl Process for AttitudeController {
         } else {
             return None;
         }
-        /*if let Some(setpoint)= wrench_setpoint {
-            if let Some(wrench_sender)= &mut self.wrench_sender && 
-                        wrench_sender.receiver_count() > 0{
-                let _= wrench_sender.send(setpoint);
-                return None;
-            } else {
-                return Some(setpoint);
-            }
-        }*/
                 
     }
 

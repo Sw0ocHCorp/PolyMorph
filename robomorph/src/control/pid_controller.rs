@@ -8,13 +8,21 @@
 //!   and its gains travel as `motor_messages::PIDConfig`) and for the future velocity loop, where
 //!   the only integrator of the cascade lives.
 
+use std::{fmt::Debug, marker::PhantomData, ops::Add, time::Duration};
+pub trait PIDValue: Copy + Default + Debug + Add<Output = Self> {
+    fn error_from(&self, setpoint: Self) -> Self;  // useful to compute the error for the PID
+    fn compute_p(&self, setpoint: Self, k_p: f64) -> Self;   // useful to compute the error for the P term of the PID
+    fn compute_i(&mut self, error: Self, max_accum_error: f64, k_i: f64, dt: Duration) -> Self;  // useful to compute the I term of the PID
+    fn compute_d(&self, setpoint: Self, prev_error: Self, k_d: f64, dt: Duration) -> Self;  // useful to compute the D term of the PID
+}
+
 /// Scalar PID with derivative-on-error, clamped integrator and dead band. Stateful
 /// (`error_accumulator`, `prev_error`): one instance per controlled quantity.
 ///
 /// Units: the error is in the unit of the servoed quantity (e.g. rad for a joint), `dt` in
 /// seconds, and the output is in whatever unit the gains map it to.
 #[derive(Debug, Clone, Copy)]
-pub struct PIDController {
+pub struct PIDController<T: PIDValue> {
     /// Proportional gain.
     p: f64,
     /// Integral gain.
@@ -22,9 +30,9 @@ pub struct PIDController {
     /// Derivative gain.
     d: f64,
     /// Integral of the error (error-unit * s), clamped to `+/- max_error_accum`.
-    error_accumulator: f64,
+    error_accumulator: T,
     /// Error of the previous call, for the numerical derivative and the dead-band test.
-    prev_error: f64,
+    prev_error: T,
     /// Dead band: when `|error|` and `|prev_error|` are both below it, the state is reset and the
     /// output is zero. `0.0` disables it.
     min_correction_error: f64,
@@ -32,60 +40,40 @@ pub struct PIDController {
     max_error_accum: f64,
 }
 
-impl PIDController {
+impl<T: PIDValue> PIDController<T> {
     /// Pure proportional controller with unit gain, no dead band, no integrator clamp.
     pub fn new_default() -> Self {
         return Self { p: 1.0, i: 0.0, d: 0.0, 
-                        error_accumulator: 0.0, prev_error: 0.0, 
+                        error_accumulator: T::default(), prev_error: T::default(), 
                         min_correction_error: 0.0, max_error_accum: f64::INFINITY 
                     };
     }
 
     /// Build with explicit gains, dead band and integrator clamp; the state starts at zero.
     pub fn new(p: f64, i: f64, d: f64, min_correction_error: f64, max_error_accum: f64) -> Self {
-        return Self { p, i, d, 
-                        error_accumulator: 0.0, prev_error: 0.0, 
-                        min_correction_error, max_error_accum };
-    }
-
-    /// One control step from an already computed error (`setpoint - measurement`), `dt` in seconds.
-    ///
-    /// * Dead band: if both the current and the previous `|error|` are below
-    ///   `min_correction_error`, the state is reset and `0.0` is returned.
-    /// * Otherwise the integral is advanced by `error * dt` and clamped, and
-    ///   `p * error + i * integral + d * (error - prev_error) / dt` is returned.
-    ///
-    /// The derivative is taken on the ERROR with a first-order difference: it is noisy on a noisy
-    /// measurement and produces a kick when the setpoint steps.
-    // NOTE: with `i == 0` the accumulator still integrates (and clamps) internally: harmless for the
-    // output but stateful, so a later `set_params` with `i != 0` starts from the accumulated history.
-    // NOTE: `dt == 0` divides by zero in the derivative term (inf / NaN output).
-    pub fn compute_output_from_error(&mut self, error: f64, dt: f64) -> f64 {
-        let mut output= 0.0;
-        if error.abs() < self.min_correction_error && self.prev_error.abs() < self.min_correction_error {
-            self.reset();
-        } else {
-            self.error_accumulator= f64::clamp(self.error_accumulator + error * dt, -self.max_error_accum, self.max_error_accum);
-            let p_val= error * self.p;
-            let i_val= self.error_accumulator * self.i;
-            // after a reset `prev_error` is 0, so the first derivative is taken against zero rather than
-            // the real previous error
-            let d_val= ((error - self.prev_error) * self.d) / dt;
-            output= p_val + i_val + d_val;
-            self.prev_error= error;
-        }
-        return output;
+        return Self { p, i, d,
+                        error_accumulator: T::default(), prev_error: T::default(),
+                        min_correction_error, max_error_accum};
     }
 
     /// One control step from a measurement and a setpoint (`error = setpoint - current`), `dt` in s.
-    pub fn compute_output(&mut self, current_value: f64, setpoint_value: f64, dt: f64) -> f64 {
-        return self.compute_output_from_error(setpoint_value - current_value, dt);
+    pub fn compute_output(&mut self, current_value: T, setpoint_value: T, dt: Duration) -> T {
+        let p= current_value.compute_p(setpoint_value, self.p);
+        
+        let i= self.error_accumulator.compute_i(current_value.error_from(setpoint_value), 
+                                                                self.max_error_accum, self.i, dt);
+        
+        let d= current_value.compute_d(setpoint_value, self.prev_error, self.d, dt);
+        println!("P: {:?} | I: {:?} | D: {:?}", p, i, d);
+        let output_value=  p + i + d;
+        self.prev_error= current_value.error_from(setpoint_value);
+        return output_value;
     }
 
     /// Clear the state (integral and previous error). Gains are kept.
     pub fn reset(&mut self) {
-        self.prev_error= 0.0;
-        self.error_accumulator= 0.0;
+        self.prev_error= T::default();
+        self.error_accumulator= T::default();
     }
 
     /// Replace the gains, dead band and clamp. The state is NOT reset (see the NOTE on

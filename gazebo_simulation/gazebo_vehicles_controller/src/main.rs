@@ -1,6 +1,6 @@
 pub mod vehicle_controllers;
 use nalgebra::Matrix3;
-use robomorph::{communications::{interface::HardwareInterface, udp_interface::UdpInterface}, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, motion_controller::{MotionController, VehicleKinematicConfig}, motors_mixer::MotorsMixer}}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
+use robomorph::{communications::{interface::HardwareInterface, udp_interface::UdpInterface}, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, motion_controller::{MotionController, VehicleKinematicConfig}, motors_mixer::MotorsMixer, speed_controller::SpeedController}, pid_controller::PIDController}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
 use tokio::sync::broadcast::{Sender, channel};
 use crate::vehicle_controllers::{osprai_controller::{OspraiController}, vehicle_controller::VehicleController};
 
@@ -32,12 +32,15 @@ fn main() {
     };
     let mut remote_controller= XboxPadControl::new("remote_controller".to_string(), 5);
     let mut udp_interface= UdpInterface::new("127.0.0.1", 8080, "127.0.0.1", 8090, 10);
+    let accel_pid= PIDController::new(1.0, 1.0/(0.01*0.01), 0.0, 0.0, f64::INFINITY);
+    let mut speed_controller= SpeedController::new("speed_controller".to_string(), vehicle_config.weight, accel_pid);
     let mut attitude_controller= AttitudeController::new("attitude_controller".to_string(), vehicle_config, 0.2, 1.0);
     let mut motor_mixer= MotorsMixer::new("motor_mixer".to_string(), vehicle_config.clone());
     let mut osprai_controller= OspraiController::default();
     remote_controller.connect();
     remote_controller.set_period_from_freq(100);
     osprai_controller.set_period_from_freq(100);
+    speed_controller.set_period_from_freq(100);
     attitude_controller.set_period_from_freq(100);
     motor_mixer.set_period_from_freq(100);
 
@@ -61,13 +64,11 @@ fn main() {
     osprai_controller.set_motion_setpoint_sender(mc_setpoint_sender.clone());
 
     //the attitude controller receive data from the vehicle controller: pose (current pose)
+    speed_controller.set_receiver(vehicle_telemetry_sender.subscribe());
+    speed_controller.set_setpoint_receiver(mc_setpoint_sender.subscribe());
     attitude_controller.set_receiver(vehicle_telemetry_sender.subscribe());
-    attitude_controller.set_setpoint_receiver(mc_setpoint_sender.subscribe());
     /*attitude_controller.set_receiver(vehicle_telemetry_sender.subscribe());
-    //the attitude controller receive data from the vehicle controller: vehicle attitude
-    attitude_controller.set_input_data_receiver(vehicle_telemetry_sender.subscribe());
-    //the attitude controller send attitude setpoint
-    attitude_controller.set_sender(mc_setpoint_sender.clone());*/
+    attitude_controller.set_setpoint_receiver(mc_setpoint_sender.subscribe());*/
     
     //the motor mixer receive data from the attitude controller: wrench setpoint
     motor_mixer.set_motor_config_receiver(motor_config_sender.subscribe());
@@ -94,6 +95,7 @@ fn main() {
     // attitude) and mixer right after attitude (the pipe carries the wrench within the pass).
     scheduler.register_process(Box::new(osprai_controller));
     scheduler.register_process(Box::new(remote_controller));
+    scheduler.register_process(Box::new(speed_controller));
     scheduler.register_process(Box::new(attitude_controller));
     scheduler.register_process(Box::new(motor_mixer));
     //scheduler.register_process(Box::new(attitude_controller));

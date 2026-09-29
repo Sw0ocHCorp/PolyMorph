@@ -7,7 +7,7 @@ use std::{collections::HashMap, f64::consts::PI, sync::{atomic::{AtomicBool, Ord
 
 use chrono::Utc;
 use gz::{msgs::{actuators::Actuators, empty::Empty, image::Image, imu::IMU, laserscan::LaserScan, model::Model, navsat::NavSat, odometry::Odometry, scene::Scene}, transport::{Node, Publisher}};
-use nalgebra::{UnitQuaternion, Vector3};
+use nalgebra::{Rotation3, UnitQuaternion, Vector3};
 use prost_types::Timestamp;
 use robomorph::{communications::interface::HardwareInterface, control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_controller::{MotorController, quaternion_to_euler, working_axis_to_vec3}, motors_mixer::MotorsMixer}, pid_controller::PIDController}, core::scheduler::Process, messages::{lidar_messages::{LidarMeasurements, Ray}, motor_messages::{MotorCommandType, MotorFeedBack, MotorModel, MotorStatus, PIDConfig, WorkingAxis}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 use tokio::sync::{broadcast, mpsc};
@@ -250,6 +250,7 @@ impl VehicleController for OspraiController {
         let verbose= self.verbose.clone();
         if let Some(node)=  &mut self.controller_node {
             self.motors_command_publisher = node.advertise::<Actuators>("/osprai/command/motor_setpoints");
+            let osprai_state_odom= self.telemetry_state.clone();
             // Ground-truth pose from the simulator. Not used by the chain, but it is the judge of
             // every frame-convention test: cross-check the IMU quaternion against it.
             let _= node.subscribe("/model/osprai/odometry", move |msg: Odometry| {
@@ -257,6 +258,29 @@ impl VehicleController for OspraiController {
                     println!("[INFO] -> True pose= {:?}", msg.pose);
                     print!("");
                 }
+                if let Ok(mut telemetry_state) = osprai_state_odom.clone().lock() {
+                    let now= Timestamp {
+                        seconds: Utc::now().timestamp(),
+                        nanos: Utc::now().timestamp_subsec_nanos() as i32,
+                    };
+                    telemetry_state.pose_state.timestamp= Some(now);
+                    let rx= Rotation3::from_axis_angle(&Vector3::x_axis(), msg.pose.orientation.x);
+                    let ry= Rotation3::from_axis_angle(&Vector3::y_axis(), msg.pose.orientation.y);
+                    let rz= Rotation3::from_axis_angle(&Vector3::z_axis(), msg.pose.orientation.z);
+                    let l_velocity= (rx * ry * rz) * Vector3::new(msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z);
+                    telemetry_state.pose_state.l_velocity= Some(Vec3(l_velocity)); 
+                    
+                }
+                /*if let Ok(mut telemetry_state) = osprai_state_imu.clone().lock() &&
+                        let Some(imu)= telemetry_state.pose_state.imu_measurement.as_mut() {
+                    let now= Timestamp {
+                        seconds: Utc::now().timestamp(),
+                        nanos: Utc::now().timestamp_subsec_nanos() as i32,
+                    };
+                    if (now - imu)
+                        osprai_state_odom.= msg.twist
+                }*/
+                    
             });
             // 250 Hz. Orientation, gyro and accelerometer are written together, so a reader that
             // takes the lock once sees a coherent (q, omega) pair. The accelerometer norm is a free
@@ -388,9 +412,8 @@ impl VehicleController for OspraiController {
                                                             min_correction_error: 0.0, max_error_accum: PI}),
                                         control_frequency: 50,
                                     };
-                                    let pid= PIDController::new(0.2, 1.0, 0.0, 0.0, PI);
                                     if let Ok(mut motors) = self.motors.clone().lock() {  
-                                        motors.push(MotorController::new(motor_model, motor_feedback, pid));
+                                        motors.push(MotorController::new(motor_model, motor_feedback));
                                     }
                                     //motor_mixer.add_or_update_motor(MotorController::new(motor_model, motor_feedback, pid));
                                 } else if link.name.contains("rotor") {
@@ -431,9 +454,8 @@ impl VehicleController for OspraiController {
                                                             min_correction_error: 0.0, max_error_accum: f64::INFINITY}),
                                         control_frequency: 50,
                                     };
-                                    let pid= PIDController::new(1.0, 0.0, 0.0, 0.0, f64::INFINITY);
                                     if let Ok(mut motors) = self.motors.clone().lock() { 
-                                        motors.push(MotorController::new(motor_model, motor_feedback, pid));
+                                        motors.push(MotorController::new(motor_model, motor_feedback));
                                     }
                                 }
                             if verbose.clone() {
@@ -574,95 +596,6 @@ impl VehicleController for OspraiController {
         }
     }
 
-    /// Apply the setpoints values for all the actuators
-    /// 
-    /// Arguments:
-    /// 
-    /// setpoints: list of the setpoints to apply
-    /// 
-    /// Notes:
-    /// 
-    /// Not used in this implementation because setpoint to apply lived in the motor states in the vehicle state
-    /*fn apply_actuator_setpoints(&mut self, setpoints: Vec<AnyMessage>, _dt: Duration) {
-        let mut current_orientation= UnitQuat { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
-        let mut imu_measurements= IMUMeasurements { l_accel: Some(Vec3::new(0.0, 0.0, 0.0)), 
-                                                                    a_velocity: Some(Vec3::new(0.0, 0.0, 0.0)), 
-                                                                    magnetic_field: Some(Vec3::new(0.0, 0.0, 0.0))
-                                                                };
-        if let Ok(state)= self.telemetry_state.lock() {
-            if let Some(orientation) = state.pose_state.orientation && 
-                    let Some(imu)= state.pose_state.imu_measurement.clone() {
-                current_orientation= orientation;
-                imu_measurements= imu;
-            }
-        } 
-        let current_pose= AnyMessage::PoseState(Pose { relative_location: Some(Vec3::new(0.0, 0.0, 0.0)),
-                                                                    gnss_measurement: Some(GNSSMeasurement { longitude: 0.0, 
-                                                                                                                latitude: 0.0, 
-                                                                                                                altitude: 0.0, 
-                                                                                                                fix_status: 0, 
-                                                                    }), 
-                                                                    imu_measurement: Some(imu_measurements),
-                                                                    orientation: Some(current_orientation),
-                                                                    l_velocity: Some(Vec3::new(0.0, 0.0, 0.0)) });
-        
-        let pose_setpoint= AnyMessage::PoseState(Pose { relative_location: Some(Vec3::new(0.0, 0.0, 0.0)),
-                                                                    gnss_measurement: Some(GNSSMeasurement { longitude: 0.0, 
-                                                                                                                latitude: 0.0, 
-                                                                                                                altitude: 0.0, 
-                                                                                                                fix_status: 0, 
-                                                                    }), 
-                                                                    imu_measurement: Some(IMUMeasurements { l_accel: Some(Vec3::new(0.0, 0.0, 0.0)), 
-                                                                                                                a_velocity: Some(Vec3::new(0.0, 0.0, 0.0)), 
-                                                                                                                magnetic_field: Some(Vec3::new(0.0, 0.0, 0.0)) 
-                                                                    }),
-                                                                    orientation: Some(UnitQuat::from(UnitQuaternion::from_euler_angles(f64::to_radians(-5.0), 0.0, 0.0))),
-                                                                    l_velocity: Some(Vec3::new(0.0, 0.0, 0.5)) });
-        // the commands are not computed here anymore: the MotorsMixer is a Process of its own and
-        // publishes them on the command channel, so they reach this method through `setpoints`.
-        let Some(motors_command)= setpoints.into_iter().find_map(|msg| match msg {
-            AnyMessage::MotorCommands(commands) => Some(commands),
-            _ => None,
-        }) else {
-            return;
-        };
-        if let Ok(motors)= self.motors.lock() &&
-                let Some(motor_pub)= self.motors_command_publisher.as_mut() &&
-                motors_command.len() > 0 {
-            let mut actuator_setpoints= Actuators::new();
-            for id in self.motors_command_sequence.clone() {
-                for cmd in motors_command.clone() {
-                    if cmd.id == id as u32 && let Some(motor_controller)= motors.iter().find(|mc| mc.get_motor_model().id == cmd.id) {
-                        // The motor_mixer works in EFFORT units: newtons for a thruster, radians for a joint.
-                        // Gazebo speaks the actuator's own unit, so the conversion happens here, at the
-                        // hardware boundary, and only for the motors that need it.
-                        if cmd.command_type == MotorCommandType::THRUST as i32 {
-                            // thrust -> rotor speed: the MulticopterMotorModel is driven in rad/s
-                            //      T = transmission * effort_constant * w^exp   =>   w = (T / (transmission * effort_constant))^(1/exp)
-                            let motor_model= motor_controller.get_motor_model();
-                            let setpoint_rot_speed= (cmd.setpoint_value / (motor_model.transmission_factor * motor_model.effort_constant)).powf(1.0 / motor_model.exp_command_law as f64);
-                            actuator_setpoints.velocity.push(setpoint_rot_speed);
-                        } else {
-                            // a position-controlled joint is already commanded in radians: no conversion
-                            actuator_setpoints.position.push(cmd.setpoint_value);
-                        }
-                    }
-                }
-            }
-            // NEVER publish a non finite command. Gazebo rejects it ("Invalid joint velocity value [nan]")
-            // but the MulticopterMotorModel keeps it in its first order filter state, which stays NaN
-            // for the rest of the run: the rotor never spins again and the whole chain reads zero thrust.
-            // Same rule applies to real hardware: an ESC fed garbage does not come back on its own.
-            if actuator_setpoints.velocity.iter().chain(actuator_setpoints.position.iter()).any(|v| !v.is_finite()) {
-                println!("[ERROR] -> Non finite actuator setpoint, command dropped: {:?}", actuator_setpoints);
-                return;
-            }
-            println!("Publishing actuator setpoints: {:?}", actuator_setpoints);
-            let _= motor_pub.publish(&actuator_setpoints);
-        }
-    }*/
-
-
     /// Send telemetry data to the telemetry receiver linked to telemetry_sender
     /// 
     /// Most likely to an interface
@@ -677,11 +610,6 @@ impl VehicleController for OspraiController {
             // which is not an error here
             println!("Telemetry Sent:\n{:?} to {} receivers", telemetry_state.pose_state.clone(), sender.receiver_count());
             let _ = sender.send(AnyMessage::PoseState(telemetry_state.pose_state.clone()));
-            /*if let Ok(motors)= self.motors.lock() {
-                for motor_controller in motors.iter() {
-                    //let _ = sender.send(AnyMessage::MotorState(motor.clone()));
-                }
-            }*/
         }
     }
 
@@ -708,10 +636,14 @@ impl Process for OspraiController {
             let mut pose_setpoint= Pose::default();
             pose_setpoint.orientation= Some(UnitQuat::from(UnitQuaternion::identity()));
             pose_setpoint.imu_measurement= Some(IMUMeasurements::default());
-            if let Some(measurements)= &mut pose_setpoint.imu_measurement {
+            //setpoint for Speed Controller: 0, 0, 1.0 m/s 
+            pose_setpoint.l_velocity= Some(Vec3::new(0.0, 0.0, 1.0));
+            //setpoint for Atitude Controller: identity quaternion, omega_d = 0, l_accel = 0, 0, 10 m/s^2
+            /*if let Some(measurements)= &mut pose_setpoint.imu_measurement {
                 measurements.a_velocity= Some(Vec3::default());
                 measurements.l_accel= Some(Vec3::new(0.0, 0.0, 10.0));
-            }
+            }*/
+            
             let _= setpoint_sender.send(pose_setpoint);
         }
         if let Some(cmds_rcvr) = &mut self.interface_cmd_receiver {
