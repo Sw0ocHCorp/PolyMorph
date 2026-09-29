@@ -57,7 +57,7 @@ Two threads at the same nominal frequency **never stay in phase**: their schedul
 
 Two ways to remove it:
 
-1. **Same chain, producer registered before consumer.** Processes then share one clock and run in order: a value published and consumed **in the same pass, by construction**. This is the architecture in use.
+1. **Same processes pipeline, producer registered before consumer.** Processes then share one clock and run in order: a value published and consumed **in the same pass, by construction**. This is the architecture in use.
 2. **Strictly faster producer** (≥ 2×), for instance publishing from a sensor callback. Useful when producer and consumer must live on different threads.
 
 From the control point of view, equal frequencies are healthy: the cascade's time-scale separation lives in the time constants, not in the tick rates. The only constraint is the floor of the fastest loop (`τ ≥ 10·T`).
@@ -66,7 +66,7 @@ From the control point of view, equal frequencies are healthy: the cascade's tim
 
 | Mechanism | Guarantee | Used for |
 |---|---|---|
-| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass of the same chain | attitude → mixer |
+| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass of the same processes pipeline | attitude → mixer |
 | **broadcast channel** (tokio) | asynchronous, non-blocking, bounded capacity, `Lagged` when a receiver falls behind | telemetry, motor feedback, commands |
 
 A `Lagged` error means *"messages were skipped, carry on"*. Treating it as a termination condition kills the consumer silently.

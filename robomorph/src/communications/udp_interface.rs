@@ -89,10 +89,10 @@ impl UdpInterface {
 }
 
 /// `Process` is implemented only for the channel wiring (`set_sender` / `set_receiver`) and the
-/// name; the interface is never registered in a `ProcessesChain`.
+/// name; the interface is never registered in a `ProcessesPipeline`.
 impl Process for UdpInterface {
 
-    // NOTE: `todo!()`: registering the interface in a chain would panic at its first tick. The
+    // NOTE: `todo!()`: registering the interface in a processes pipeline would panic at its first tick. The
     // interface is not scheduled; its work is done by the RX / TX threads started in `connect`.
     fn exec(&mut self, _input: &Option<AnyMessage>, _dt: std::time::Duration) -> Option<AnyMessage> {
         todo!()

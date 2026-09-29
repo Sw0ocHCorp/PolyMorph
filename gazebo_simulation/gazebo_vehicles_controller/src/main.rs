@@ -7,10 +7,10 @@ use crate::vehicle_controllers::{osprai_controller::{OspraiController}, vehicle_
 
 /// Wiring of the simulation binary. Rules this wiring obeys (each learnt from a bug, see
 /// `docs/src/validation/lecons.md`):
-///   - every stage of the control loop lives in the SAME chain (one clock) and is registered in
-///     producer -> consumer order: osprai (publishes the pose) -> remote -> attitude -> mixer. Two
-///     chains at the same nominal frequency on two threads drift in phase and produce empty /
-///     double ticks (beat);
+///   - every stage of the control loop lives in the SAME processes pipeline (one clock) and is
+///     registered in producer -> consumer order: osprai (publishes the pose) -> remote -> attitude
+///     -> mixer. Two processes pipelines at the same nominal frequency on two threads drift in phase
+///     and produce empty / double ticks (beat);
 ///   - all stages run at the same frequency (100 Hz): the time-scale separation of the cascade
 ///     lives in the time constants, not in the tick rates. tau_attitude = 0.2 s >= 10 * T;
 ///   - the wrench goes from the attitude stage to the mixer through the scheduler PIPE (the
@@ -101,9 +101,9 @@ fn main() {
     //scheduler.register_process(Box::new(attitude_controller));
     scheduler.register_interface(Box::new(udp_interface));
     scheduler.start_all_interfaces();
-    scheduler.start_all_side_chains();
+    scheduler.start_all_side_pipelines();
     loop {
-        scheduler.run_main_chain();
+        scheduler.run_main_pipeline();
     }   
 }
 

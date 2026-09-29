@@ -26,9 +26,9 @@ Every entry links an observed symptom to the mechanism that explains it and the 
 |---|---|---|
 | rotors alternating 5.9 N / 0.1 N at loop rate | on ticks without fresh telemetry (250 Hz controller vs 100 Hz telemetry) the attitude stage published `WorkVec::default()` | missing data is never a zero: return `None`, the consumer holds |
 | 98.6 % null setpoints at the mixer while the attitude stage computed correctly 32 % of the time | the pipe's `input_state` reset to `None` every pass: producer and consumer landed in different passes | the pipe is only reliable within one pass; make its state persistent |
-| 30 empty / 30 double ticks out of 454 | beat between two threads at the same nominal frequency | one chain, one clock; producer registered before consumer |
+| 30 empty / 30 double ticks out of 454 | beat between two threads at the same nominal frequency | one processes pipeline, one clock; producer registered before consumer |
 | 23 ticks of zero thrust after a single abstention | a zero latched by the mixer's hold while the pipe was broken by a pass overrun (a very verbose mixer) | verbose behind a flag; count late passes |
-| all chains freezing mid-run | a debugger breakpoint | (not a bug) |
+| all processes pipelines freezing mid-run | a debugger breakpoint | (not a bug) |
 
 ## Physics and solver (rung C)
 
@@ -58,7 +58,7 @@ Annotating the code surfaced fragilities that have not (yet) shown up at run tim
 
 | File | Point |
 |---|---|
-| `core/scheduler.rs` | pipe reset every pass; an empty chain spins forever; a late process's deadline reset to *now* (phase scrambling); `dt` = nominal period, not elapsed time; non-contiguous side-chain ids create empty spinning chains |
+| `core/scheduler.rs` | pipe reset every pass; an empty processes pipeline spins forever; a late process's deadline reset to *now* (phase scrambling); `dt` = nominal period, not elapsed time; non-contiguous side-pipeline ids create empty spinning pipelines |
 | `messages/registered_message.rs` | `from_frame` panics on an empty frame and never checks the tag byte; `MotorModel` and `RemoteControl` encode but are never decoded |
 | `messages/motor_messages.rs` | `WorkingAxis::Unknown` (0) falls into the "joint" family through the mixer's ordering tests |
 | `communications/udp_interface.rs` | TX thread dies on `Lagged`; internal-only variants encode to an **empty** frame, which is also the RX thread's poison pill; RX and TX on the same channel echo received frames; `buffer_capacity` unused |

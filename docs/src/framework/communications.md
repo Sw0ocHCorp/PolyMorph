@@ -50,6 +50,6 @@ The trait for external links (UDP today, UART later): `connect`, `send_message`,
 
 ## Remote control
 
-`XboxPadControl` (gilrs) is a `Process`: on each `exec`, `scan_buttons` polls up to `n_listening` events (`next_event()` is **non-blocking**) and returns a `RemoteControl` — a snapshot of the sticks and buttons *seen this tick*. It is registered in the main chain, but its output is not consumed by the control chain yet: stabilize mode uses a fixed identity setpoint. Wiring it later means building `q_d` from the sticks (roll and pitch directly, yaw integrated to hold a heading) — pure setpoint construction, no new theory.
+`XboxPadControl` (gilrs) is a `Process`: on each `exec`, `scan_buttons` polls up to `n_listening` events (`next_event()` is **non-blocking**) and returns a `RemoteControl` — a snapshot of the sticks and buttons *seen this tick*. It is registered in the main pipeline, but its output is not consumed by the control chain yet: stabilize mode uses a fixed identity setpoint. Wiring it later means building `q_d` from the sticks (roll and pitch directly, yaw integrated to hold a heading) — pure setpoint construction, no new theory.
 
 > `button_pressed` is set on a **release** event, `stick_pressed` receives a trigger-axis id rather than a stick click, and a tick with no event returns an all-zero snapshot rather than the last state.

@@ -55,4 +55,4 @@ On every `exec`, the mixer's `MotorCommand`s are converted into the actuator's u
 
 - `default()` enables `verbose`, which prints a great deal (IMU, feedbacks, odometry): expensive inside the period budget.
 - `send_telemetry` prints the full pose on every tick.
-- The process order in the main chain must stay `osprai → … → attitude → mixer` so that the pose consumed is the one from the current pass.
+- The process order in the main pipeline must stay `osprai → … → attitude → mixer` so that the pose consumed is the one from the current pass.

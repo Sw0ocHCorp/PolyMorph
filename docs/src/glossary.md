@@ -92,10 +92,22 @@
 | `score_j = a_j·r`, `step_j = 1/‖a_j‖²` | score and step of the coordinate descent (`Aᵀr` is the vector of scores) |
 | trust region | `max_rot_speed·dt`, the per-cycle bound on a joint's increment |
 
+## Execution model
+
+| Term | Definition |
+|---|---|
+| process | the unit of scheduling (`Process`): a main task `exec(input, dt) -> output` run at the process's own period |
+| **processes pipeline** | the scheduler's execution unit (`ProcessesPipeline`): an ordered list of processes sharing one thread and one clock, executed in registration order and linked by the pipe. Called `ProcessesChain` before the rename |
+| main pipeline / side pipeline | the processes pipeline run on the caller's thread by `run_main_pipeline()` / one run on a dedicated thread by `start_all_side_pipelines()` |
+| pass | one walk over the processes of a processes pipeline, executing those whose due instant has come |
+| **pipe** | the value a process returns, handed as `input` to the next process of the same processes pipeline **within the same pass**, and lost after it |
+| **robotics pipeline** | a functional domain of the stack (motor control, perception…) documented under `pipelines/`. It runs on one or more processes pipelines |
+
 ## Naming traps
 
 | Name | What it actually is |
 |---|---|
+| "pipeline" | two meanings: a **processes pipeline** (scheduler execution unit) or a **robotics pipeline** (functional domain). Always qualified in this documentation |
 | `moments_matrix` | the matrix of moments of **inertia**, not moment-torques |
 | `weight` | a **mass** in kg, not a weight in newtons |
 | `WorkVec` | a wrench, not "work" in the energy sense |

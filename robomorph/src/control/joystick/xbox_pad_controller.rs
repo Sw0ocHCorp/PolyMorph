@@ -28,7 +28,7 @@ pub struct XboxPadControl {
 }
 
 impl Process for XboxPadControl {
-    /// Polls the pad and hands the snapshot to the next process of the chain (pipe). The pipe input
+    /// Polls the pad and hands the snapshot to the next process of the processes pipeline (pipe). The pipe input
     /// is ignored.
     // NOTE: on a tick without any event this returns `Some(RemoteControl::default())`, an all-zero
     // snapshot; `None` is returned only when the pad is not connected.

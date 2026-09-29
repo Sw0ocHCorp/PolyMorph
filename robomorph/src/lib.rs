@@ -3,8 +3,8 @@
 //! * `messages`: the message catalogue (`AnyMessage`, wire tags, `Vec3` / `UnitQuat`) and the
 //!   protobuf structs exchanged between processes and with the hardware (`Pose`, IMU / GNSS /
 //!   lidar samples, `MotorModel`, `MotorFeedBack`, `MotorCommand`, `WorkVec`).
-//! * `core`: the scheduler (`Process`, `ProcessesChain`, `Scheduler`) that runs the processes at
-//!   their period and chains them through the pipe.
+//! * `core`: the scheduler (`Process`, `ProcessesPipeline`, `Scheduler`) that runs the processes at
+//!   their period and hands each output to the next process through the pipe.
 //! * `communications`: the `HardwareInterface` trait, the wire codec and the UDP implementation.
 //! * `control`: the scalar `PIDController`, the gamepad input, and the motion stack:
 //!   `AttitudeController` (pose -> wrench setpoint), `MotorsMixer` (wrench -> per-motor efforts by

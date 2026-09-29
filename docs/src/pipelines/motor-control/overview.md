@@ -5,7 +5,7 @@ The first robotics pipeline of the stack. It answers one question: **given a des
 ## Data flow
 
 <figure>
-<svg class="diagram" viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data flow: Gazebo sensors into the vehicle controller and the mixer, the chain of processes, and the command channel back to the actuators">
+<svg class="diagram" viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data flow: Gazebo sensors into the vehicle controller and the mixer, the processes pipeline, and the command channel back to the actuators">
   <defs>
     <marker id="p-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -43,7 +43,7 @@ The first robotics pipeline of the stack. It answers one question: **given a des
 <figcaption>Solid arrows: the scheduler pipe, within one pass. Dashed arrows: broadcast channels.</figcaption>
 </figure>
 
-All four processes run in the **same chain at 100 Hz**, registered in this order: `osprai → remote → attitude → mixer`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.md).
+All four processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → attitude → mixer`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.md).
 
 ## Stage contracts
 

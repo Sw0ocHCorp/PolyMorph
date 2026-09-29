@@ -17,7 +17,7 @@
   <rect x="80" y="150" width="126" height="94" rx="5" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.35"/>
   <text x="143" y="176" text-anchor="middle" font-size="12" font-weight="600">core</text>
   <text x="143" y="196" text-anchor="middle" font-size="10.5" opacity="0.75">Process</text>
-  <text x="143" y="212" text-anchor="middle" font-size="10.5" opacity="0.75">ProcessesChain</text>
+  <text x="143" y="212" text-anchor="middle" font-size="10.5" opacity="0.75">ProcessesPipeline</text>
   <text x="143" y="228" text-anchor="middle" font-size="10.5" opacity="0.75">Scheduler</text>
   <rect x="218" y="150" width="126" height="94" rx="5" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.35"/>
   <text x="281" y="176" text-anchor="middle" font-size="12" font-weight="600">messages</text>
@@ -50,7 +50,7 @@
 | Crate | Role |
 |---|---|
 | `robomorph/` | The generic library: scheduler, messages, communications, control (motor model, mixer, attitude, PID, gamepad). No dependency on Gazebo. |
-| `gazebo_simulation/gazebo_vehicles_controller/` | The simulation binary: instantiates the chain for the OSPRAI and bridges to Gazebo Harmonic through `gz-transport` (`OspraiController`). |
+| `gazebo_simulation/gazebo_vehicles_controller/` | The simulation binary: instantiates the processes pipeline for the OSPRAI and bridges to Gazebo Harmonic through `gz-transport` (`OspraiController`). |
 | `gazebo_simulation/vehicles/osprai/` | The vehicle's SDF model: geometry, inertia, sensors, rotor plugins. |
 | `gazebo_simulation/environments/` | The Gazebo world. |
 | `companion/` | Empty shell today (future companion software). |
@@ -59,7 +59,7 @@
 
 ```
 robomorph/src
-├── core/scheduler.rs              Process, ProcessesChain, Scheduler
+├── core/scheduler.rs              Process, ProcessesPipeline, Scheduler
 ├── messages/
 │   ├── registered_message.rs      AnyMessage, MessageType, Vec3, UnitQuat, Translatable
 │   ├── motor_messages.rs          WorkVec, MotorModel, MotorFeedBack, MotorCommand, enums
@@ -80,7 +80,7 @@ robomorph/src
 
 ## The execution model in one paragraph
 
-Everything that runs periodically is a **`Process`**. Processes are grouped in a **`ProcessesChain`**, which owns one clock and executes them in registration order. A `Scheduler` runs one chain on the caller's thread and any number of others on dedicated threads. Two transport mechanisms connect processes: the **pipe** (the value returned by one process becomes the input of the next one in the same chain) and **broadcast channels** (asynchronous, non-blocking, used across chains and with the sensor callbacks). See [The scheduler](scheduler.md) and [Conventions and invariants](conventions.md).
+Everything that runs periodically is a **`Process`**. Processes are grouped in a **processes pipeline** (`ProcessesPipeline`), which owns one clock and executes them in registration order. A `Scheduler` runs one processes pipeline on the caller's thread (the main pipeline) and any number of others on dedicated threads (the side pipelines). Two transport mechanisms connect processes: the **pipe** (the value returned by one process becomes the input of the next one in the same processes pipeline) and **broadcast channels** (asynchronous, non-blocking, used across processes pipelines and with the sensor callbacks). See [The scheduler](scheduler.md) and [Conventions and invariants](conventions.md).
 
 ## Where the boundary lies
 

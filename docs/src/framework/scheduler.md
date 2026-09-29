@@ -2,6 +2,8 @@
 
 File: `robomorph/src/core/scheduler.rs`.
 
+> **Vocabulary.** A **processes pipeline** (`ProcessesPipeline`) is the scheduler's execution unit: an ordered list of processes sharing one thread and one clock, linked by the pipe. It is not a **robotics pipeline**, a functional domain of the stack such as [motor control](../pipelines/motor-control/overview.md). A robotics pipeline runs on one or more processes pipelines. Until the rename, the type was called `ProcessesChain`.
+
 ## The `Process` trait
 
 A `Process` is the unit of scheduling. Its core method is:
@@ -10,13 +12,13 @@ A `Process` is the unit of scheduling. Its core method is:
 fn exec(&mut self, input: &Option<AnyMessage>, dt: Duration) -> Option<AnyMessage>;
 ```
 
-- `input` is the **pipe**: the value returned by the previous process of the same chain, in the same pass.
+- `input` is the **pipe**: the value returned by the previous process of the same processes pipeline, in the same pass.
 - The returned value becomes the `input` of the next process. `Some(...)` hands something over; `None` means *nothing to hand over* — an explicit abstention.
 - `dt` currently receives the process's nominal **period**, not the measured elapsed time.
 
 The remaining methods (`set_receiver`, `set_sender`, `set_period_from_freq`, `get_period`, `set_name`, `get_name`) are wiring.
 
-## One pass of a chain
+## One pass of a processes pipeline
 
 <figure>
 <svg class="diagram" viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="One scheduler pass: four processes executed in registration order, connected by the pipe, with broadcast channels underneath">
@@ -57,9 +59,9 @@ The remaining methods (`set_receiver`, `set_sender`, `set_period_from_freq`, `ge
 <figcaption>Registration order is execution order. The pipe only survives within a pass.</figcaption>
 </figure>
 
-## `ProcessesChain`
+## `ProcessesPipeline`
 
-A chain is an ordered list of `(process, next due instant)`. `run_once`:
+A processes pipeline is an ordered list of `(process, next due instant)`. `run_once`:
 
 1. computes `end_instant`, the latest of the `instant + period` deadlines;
 2. loops until `end_instant` is passed: on each pass it walks the processes **in registration order**, executes those whose deadline has come (propagating the pipe), advances their deadline by one period, then sleeps until the nearest deadline.
@@ -68,21 +70,21 @@ If a process is late (its next deadline is already in the past after it ran), it
 
 ### Three properties to know
 
-> **1. `input_state` is local to one iteration of the wait loop.** It is reset to `None` on every iteration and every call to `run_once`. The pipe is therefore only reliable when producer and consumer run **in the same pass**: same chain, same period, registered in order. Making the pipe state a field of `ProcessesChain` would make it reliable in every case.
+> **1. `input_state` is local to one iteration of the wait loop.** It is reset to `None` on every iteration and every call to `run_once`. The pipe is therefore only reliable when producer and consumer run **in the same pass**: same processes pipeline, same period, registered in order. Making the pipe state a field of `ProcessesPipeline` would make it reliable in every case.
 
 > **2. Resetting a late process's deadline to *now* shifts its phase** relative to the others. If a pass overruns its period (a very verbose mixer, for example), deadlines can reorder and the pipe breaks. Hence the rule: verbose output behind a flag, and watch for overruns.
 
-> **3. An empty chain spins forever**: `run_finished` is only set inside the `for` loop over the processes. Never start a chain with no process in it.
+> **3. An empty processes pipeline spins forever**: `run_finished` is only set inside the `for` loop over the processes. Never start a processes pipeline with no process in it.
 
 ## `Scheduler`
 
-- `register_process` → **main chain**, run on the caller's thread by `run_main_chain()` (the binary calls it in a `loop`).
-- `register_side_process(p, id)` → **side chain** `id`, run on a dedicated thread by `start_all_side_chains()`.
+- `register_process` → **main pipeline**, run on the caller's thread by `run_main_pipeline()` (the binary calls it in a `loop`).
+- `register_side_process(p, id)` → **side pipeline** `id`, run on a dedicated thread by `start_all_side_pipelines()`.
 - `register_interface` / `start_all_interfaces` → `HardwareInterface`s are *connected* (they own their threads); they are not scheduled.
 
-### Architectural rule: one chain, one clock
+### Architectural rule: one processes pipeline, one clock
 
-A producer and its consumer must live **in the same chain**. Two chains at the same nominal frequency on two threads drift in phase and produce empty and double ticks — a beat, measured at 30 empty / 30 double ticks out of 454 before the pose producer joined the controllers' chain. Side chains are for decoupled work (heavy perception), not for the links of a control loop.
+A producer and its consumer must live **in the same processes pipeline**. Two processes pipelines at the same nominal frequency on two threads drift in phase and produce empty and double ticks — a beat, measured at 30 empty / 30 double ticks out of 454 before the pose producer joined the controllers' processes pipeline. Side pipelines are for decoupled work (heavy perception), not for the links of a control loop.
 
 ## Ordering and loop delay
 

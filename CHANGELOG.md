@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ada
 
 Entries up to `130df2d` were written on 2026-09-30, the history reconstructed from the diffs of each commit rather than from the titles alone. From then on, every commit adds its own entry.
 
+An entry written in the very commit it describes cannot quote its own hash, since the hash only exists once the commit is made. Such entries are headed `date — commit title` instead; `git log --grep "<title>"` gives the hash.
+
 ## Timeline
 
 | Period | Phase | Where the code lived |
@@ -56,6 +58,26 @@ Introduced by `ba22f38` (2026-06-26) and completed by `2f81cd3` (2026-09-06). It
 - The data flow of the robot can be read from the registration order in `main.rs`.
 - Modules no longer share locks.
 - The flip side: the pipe only holds *within one pass* of a pipeline. Hence the rule "one processes pipeline, one clock; producer registered before consumer" (see `docs`, framework → scheduler).
+
+### 2026-09-30 — Rename ProcessesChain to ProcessesPipeline
+
+#### Changed
+- **Breaking (API).** `ProcessesChain`, the fundamental execution unit of the scheduler, is renamed `ProcessesPipeline`.
+  - It is an ordered list of processes sharing one clock, where each process hands its output to the next one through the pipe. "Pipeline" says what the struct does; "chain" did not.
+  - The whole scheduler vocabulary follows:
+    - `chain_id` → `pipeline_id` (also the argument of `register_side_process`);
+    - `Scheduler` fields `main_chain`, `side_chains`, `side_chain_handles` → `main_pipeline`, `side_pipelines`, `side_pipeline_handles`;
+    - `run_main_chain()` → `run_main_pipeline()`;
+    - `start_all_side_chains()` / `stop_all_side_chains()` → `start_all_side_pipelines()` / `stop_all_side_pipelines()`.
+- Callers and comments updated: Gazebo `main.rs`, `lib.rs`, `udp_interface.rs`, `xbox_pad_controller.rs`.
+- Documentation pages updated to the new vocabulary: scheduler, overview (including the diagram label), conventions, communications, lessons, motor-control overview, Gazebo.
+- Not renamed: "chain" meaning the kinematic chain of the motor tree, or the control cascade. These are different concepts.
+
+#### Added
+- Glossary section **Execution model**: process, processes pipeline, main / side pipeline, pass, pipe, robotics pipeline.
+- A naming trap: "pipeline" has two meanings, a **processes pipeline** (scheduler execution unit) or a **robotics pipeline** (functional domain such as motor control, running on one or more processes pipelines). The documentation always qualifies it.
+
+No behaviour change: once comments are stripped and the renames applied, the code of `scheduler.rs` is identical to the previous version.
 
 ### `130df2d` — 2026-09-30 — WIP: generic PID, velocity-loop and resolver drafts (chain does not fly)
 
