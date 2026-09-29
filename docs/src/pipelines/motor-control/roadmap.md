@@ -9,6 +9,25 @@ a_d = kp_v·(v_d − v) + ki·∫(v_d − v)dt        (m/s², world frame)
 f_d = m·a_d + (0, 0, m·g)                     (N, world frame)
 ```
 
+| Symbol | What it is | Type | Unit / frame |
+|---|---|---|---|
+| `v` | measured linear velocity | 3-vector | m/s, world |
+| `v_d` | desired linear velocity, from the position loop | 3-vector | m/s, world |
+| **`a_d`** | **desired linear acceleration — the law's output, a decision, not a measurement** | 3-vector | m/s², world |
+| `f_d` | desired force handed to the resolver | 3-vector | N, world |
+| `kp_v = 1/τ_v`, `ki` | proportional and integral gains | scalars | 1/s, 1/s² |
+| `m` | vehicle mass (`VehicleKinematicConfig::weight`) | scalar | kg |
+
+`a_d` is the exact linear twin of `α` in the attitude loop — the same skeleton one level up:
+
+| | Rotation | Translation |
+|---|---|---|
+| Error | `e_R` (rad) | `v_d − v` (m/s) |
+| Law output | `α` (rad/s²) | `a_d` (m/s²) |
+| Conversion to an effort | `M = I·α` | `f = m·a_d` |
+
+> `a_d` is **not** the accelerometer reading. `Pose.imu_measurement.l_accel` is a measured specific force; `a_d` is a computed decision. They are never compared: there is no acceleration feedback loop anywhere in the cascade. The `+ (0, 0, m·g)` term is the gravity feedforward — the total force is the one that produces the wanted acceleration **plus** the one that cancels the weight.
+
 - Same structure as attitude, one level up, in the **world** frame — where velocity means something, and where Gazebo's odometry provides it. `kp_v = 1/τ_v`, with `τ_v ≈ 5–10 × τ_attitude`.
 - **The cascade's only integrator lives here**: this is the stage that sees the constant biases (wind, mis-estimated mass, thrust that does not match its model). Its first job is already quantified: the roughly 0.1 % of weight discrepancy between the `k·ω²` model and Gazebo's real thrust, visible in stabilize as a slow constant-acceleration climb.
 - **Anti-windup by conditional integration**: accumulate only when the mixer reports the demand is serviceable. Its residual and its clamping already carry that information inside `compute_command_law`; it is worth surfacing in the return message.
@@ -17,20 +36,7 @@ f_d = m·a_d + (0, 0, m·g)                     (N, world frame)
 
 ## Force → attitude resolver
 
-The velocity loop outputs a desired force `f_d` in the world frame. Two cases, decided **by data** (the force columns of `A`), never by subclasses:
-
-- **fully actuated in force** (omnidirectional vehicle, rover): `f_d` passes through unchanged (rotated into the body), attitude stays independent — the resolver is the identity;
-- **under-actuated** (multirotor, bicopter outside its tilt range): the vehicle must **rotate to align its thrust direction** with `f_d`. For the single-axis case (thrust along body z):
-
-```
-thrust = ‖f_d‖
-z_d    = f_d / ‖f_d‖                  (desired body z, in the world)
-q_d    = built from (z_d, yaw_d)      — yaw is a FREE degree of freedom
-```
-
-This is the heart of multirotor flight: translation is commanded through attitude, which is why the attitude loop must be the fast stage. Guard: `f_d → 0` leaves `z_d` undefined (hold the last attitude, or floor the thrust) — the same family of degeneracy as a joint column at zero thrust.
-
-> A subtlety this stage fixes: projecting the feedforward `q⁻¹·(0,0,mg)` onto the reachable set by simply dropping `fy` yields `m·g·cos φ`, **not** `m·g/cos φ` — too little thrust to hold altitude while tilted. Computing thrust from `‖f_d‖` gets it right.
+Promoted to its own page now that it is being built: [The force → attitude resolver](resolver.md). In one line: it consumes exactly as many rotational degrees of freedom as the force constraint requires — none for a holonomic vehicle, one for the OSPRAI, two for a multirotor, the only one a differential rover has — and hands the rest to the external attitude preference.
 
 ## Position loop
 

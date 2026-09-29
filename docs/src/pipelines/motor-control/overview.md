@@ -61,7 +61,9 @@ The **wrench** is the contract that makes each side replaceable: the mixer does 
 |---|---|
 | Attitude loop (stabilize) + gravity feedforward | built, validated up to the static-equilibrium rung |
 | Control allocation over an arbitrary motor tree | built, validated on the OSPRAI |
-| Velocity loop, force→attitude resolver, position loop | [planned](roadmap.md) |
+| Velocity loop (`SpeedController`) | written, not yet validated — see [Lessons learned](lessons.md) |
+| Force → attitude resolver | [specified](resolver.md), being built |
+| Position loop | [planned](roadmap.md) |
 | Arming / spool-up sequencing, failsafe, data-age supervision | not started — belongs to a supervisor |
 
 ## The one-cycle delay
@@ -73,4 +75,5 @@ Commands computed in pass *k* are applied in pass *k+1*: the vehicle controller 
 1. [The motor model](motor-model.md) — the kinematic tree, and the distinction between an effectiveness column and a work vector. Read this before the mixer.
 2. [The mixer](mixer.md) — the allocation itself.
 3. [The attitude controller](attitude-controller.md) — the control law.
-4. [Roadmap](roadmap.md), then [Validation](validation.md) and [Lessons learned](lessons.md).
+4. [The force → attitude resolver](resolver.md) — how a force becomes an attitude setpoint, for any vehicle.
+5. [Roadmap](roadmap.md), then [Validation](validation.md) and [Lessons learned](lessons.md).

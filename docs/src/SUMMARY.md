@@ -25,6 +25,7 @@
 - [The motor model](pipelines/motor-control/motor-model.md)
 - [The mixer: control allocation](pipelines/motor-control/mixer.md)
 - [The attitude controller](pipelines/motor-control/attitude-controller.md)
+- [The force → attitude resolver](pipelines/motor-control/resolver.md)
 - [Roadmap: the remaining stages](pipelines/motor-control/roadmap.md)
 - [Validation](pipelines/motor-control/validation.md)
 - [Lessons learned](pipelines/motor-control/lessons.md)
