@@ -1,5 +1,5 @@
 //! Trait of the vehicle controllers: the bridge between the generic control stack and a concrete
-//! vehicle, simulated (Gazebo) or real. See `docs/src/simulation/gazebo.md`.
+//! vehicle, simulated (Gazebo) or real. See `docs/docs/simulation/gazebo.mdx`.
 
 use std::time::Duration;
 

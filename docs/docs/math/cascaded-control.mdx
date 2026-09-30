@@ -1,0 +1,113 @@
+import Diagram1 from './img/cascaded-control-1.svg';
+import Diagram2 from './img/cascaded-control-2.svg';
+import StepResponse from '@site/src/components/StepResponse';
+
+# Cascaded control
+
+## Why a cascade
+
+Vehicle control is organised as **nested loops**, each servoing a quantity that is the derivative of the one above.
+
+<figure>
+<Diagram1 />
+<figcaption>Each stage produces the setpoint of the stage below. Only the two solid stages exist today.</figcaption>
+</figure>
+
+The physics itself is a cascade: a moment rotates the vehicle (fast dynamics), the rotation reorients the thrust, the thrust accelerates the mass (slow dynamics), and integrating acceleration gives velocity then position.
+
+### Time-scale separation
+
+If the inner loop is **5 to 10× faster** than the loop enclosing it, the outer loop may treat it as perfect: by the time position has moved, velocity has already reached its setpoint. The consequences:
+
+- each loop is **tunable independently, from the inside out** — tune attitude, validate it, then never touch its gains again;
+- each loop, taken alone, sees an almost pure **double integrator** (`moment → angle`, `force → position`), for which a PD suffices — provably, not empirically;
+- all the non-linearity (rotation, under-actuation) is confined to one stage: the force → attitude resolver.
+
+> Time-scale separation lives in the **time constants τ**, not in the execution rates. Every loop may run on the same tick — see [Conventions](../framework/conventions.mdx).
+
+## Gains expressed as accelerations: (τ, ζ)
+
+Take one axis of the attitude loop. If the law output a moment directly, `M = kp·e + kd·ė`, the closed loop would be `I·ë + kd·ė + kp·e = 0`: its behaviour would depend on the inertia `I`, so the gains would have to be retuned for every vehicle.
+
+If instead the law computes a **desired angular acceleration** `α = kp·e + kd·ė` and converts at the very end with `M = I·α`, the closed loop becomes `ë + kd·ė + kp·e = 0` — **the inertia has vanished**. Identifying with the canonical second-order form `ë + 2ζωₙ·ė + ωₙ²·e = 0`:
+
+```
+kp = 1/τ²         τ : the closed-loop time constant (s)
+kd = 2ζ/τ         ζ : the damping ratio — 1 = critical, the fastest without overshoot
+```
+
+A loop therefore has exactly two tunings, `τ` and `ζ`, both **vehicle-independent**: mass and inertia are absorbed by `m` and `I` at the end of the law. The same values suit a 500 g drone and a 50 kg rover.
+
+## What (τ, ζ) actually looks like
+
+<figure>
+<Diagram2 />
+<figcaption>Error decay from an initial offset, in units of τ. This curve is the acceptance criterion of the step test.</figcaption>
+</figure>
+
+For a critically damped loop released from an initial error with zero rate, the error follows
+
+```
+e(t) = (1 + t/τ) · e^(−t/τ)
+```
+
+so the milestones are: **26 %** of the error gone after `τ`, **59 %** after `2τ`, **80 %** after `3τ`, and a 2 % settling time of about **5.8 τ**. The envelope decays as `e^(−t/τ)`; τ is the time constant of the pole, not a "63 % point" — that rule of thumb belongs to first-order systems and understates a second-order loop's settling time by a factor of about five.
+
+For a **velocity impulse** `ω₀` (the shape of a disturbance rejection, and of a bump on take-off) the error is `e(t) = ω₀·t·e^(−t/τ)`, which peaks at `t = τ` with
+
+```
+e_max = ω₀ · τ / e ≈ 0.368 · ω₀ · τ
+```
+
+then returns monotonically to zero. Both expressions are what a logged `θ(t)` must be compared against.
+
+### Explore it
+
+The same poles do not give the same response: the **structure** of the loop matters too.
+
+- **Attitude structure.** P on the angle error, D on the *measured* rate (`Y/R = ωₙ²/(s² + 2ζωₙs + ωₙ²)`). At ζ = 1 it gives the 26 / 59 / 80 % above, with no overshoot.
+- **Velocity structure.** A PI on the velocity error with `kp = 2ζ/τ` and `ki = 1/τ²`: the same poles, plus a **zero** (`Y/R = (2ζωₙs + ωₙ²)/(s² + 2ζωₙs + ωₙ²)`).
+  - The zero adds `(2ζ/ωₙ)` times the derivative of the first response.
+  - The velocity therefore reaches **100 % at τ** and overshoots by **13.5 %** at 2τ, *even at ζ = 1*.
+  - That overshoot is not a tuning error: it is the price of acting on the error itself rather than on a measured derivative.
+
+<StepResponse />
+
+## τ is constrained, ζ is chosen
+
+- **τ** is bounded from below by two measurable floors: **sampling** (`τ ≳ 10·T`, where `T` is the loop period — otherwise one cycle of delay eats the damping) and **actuator dynamics** (`τ ≳ 3–5 ×` the rotor time constant). Take the more constraining one.
+- **ζ** is a free choice; no property of the vehicle imposes it. `ζ = 1` is the right default: an attitude overshoot is a thrust-direction overshoot, and actuator lag *eats* effective damping — asking for 1 and getting ~0.8 stays healthy. It would only vary by **mode** (acro ≈ 0.7), never by vehicle.
+
+`kp` and `kd` are never stored as independent tunings: they derive from `τ` in one place. Nudging `kd` "by 20 %" would silently change ζ and forfeit the second-order guarantee. ζ stays in the formulas because it documents where the `2` in `2/τ` comes from, and because the *effective* ζ measured from a step's overshoot `D` is a diagnostic tool: `ζ = −ln(D)/√(π² + ln²D)`.
+
+## State feedback: "P on the angle, P on the rate"
+
+The attitude law reads:
+
+```
+α_k = (1/τ²) · e_R[k]  +  (2ζ/τ) · (ω_d[k] − ω[k])
+```
+
+These are **two proportional feedbacks**: one on the angle error, one on the angular-rate error. No derivative is computed anywhere: angular velocity *is* the derivative of attitude (`d(e_R)/dt ≈ ω_d − ω` to first order) and the gyroscope **measures** it — cleanly, without lag, without amplifying noise, and without the kick a setpoint step gives a numerical derivative. The rate term plays the functional role of a PID's D (it damps), hence the name, but it is not "the D of a PID on the angle".
+
+This reading has a name: **state feedback**. The rotational state of a rigid body is the pair (attitude, angular rate) — two quantities, not three. Two states → two feedbacks → complete state feedback. There is **no** third "P on acceleration" term: `α` is the law's *output*, not a measurement compared to a setpoint, and `M = I·α` is a unit conversion, not a feedback.
+
+The whole cascade follows this pattern: each stage is a pure P on its own error, and the derivative it needs for damping is supplied by the stage below, which servos the derived quantity ("the velocity loop *is* the position loop's D term"). Numerical differentiation — the classic PID's main noise source — does not exist in the chain.
+
+## Where the integrator lives, and windup
+
+An integral term corrects constant biases (wind, mis-estimated mass, thrust that does not match its model). Rule: **one integrator per physical quantity in the whole cascade**, and it lives in the **velocity loop** — the stage that sees those biases directly. Attitude does not need one (the gravity feedforward removes its main bias) and neither does position.
+
+**Windup** is the pathology specific to accumulation: while the actuators saturate, `∫e·dt` keeps piling up an error nothing can absorb; when saturation clears, the accumulator discharges as a massive overshoot. The criterion:
+
+> **A stateless term cannot wind up. Only a term that accumulates needs anti-windup.**
+
+The attitude loop, being stateless, needs none. The velocity loop will, and the right form is **conditional integration**: accumulate only when the mixer reports the demand is serviceable — information its residual already carries.
+
+## Feedforward: compensate the known, feed back the unknown
+
+Feedback corrects what could not be predicted; what is known in advance is compensated by **feedforward**. In stabilize the force needed to hold flight is known exactly: `m·g` upward in the world, rotated into the body: `f_body = q⁻¹·(0, 0, m·g)`. Leaving that job to an integrator would cost a transient error on every take-off and windup on every saturation.
+
+## Saturate every output to what the stage below can serve
+
+A far-away position setpoint would demand an enormous velocity, then an enormous force, and everything would saturate arbitrarily. Every loop **saturates its own output** to what the next stage can physically deliver — the stage-by-stage equivalent of the mixer's projection onto the feasible box.

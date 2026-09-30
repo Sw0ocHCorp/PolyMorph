@@ -1,0 +1,28 @@
+<svg class="diagram" viewBox="0 0 700 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A force applied at a rotor is equivalent to the same force at the centre of mass plus a moment equal to p cross f">
+  <defs>
+    <marker id="w-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#2aa198" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="w-arw-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#d4694a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect x="100" y="132" width="170" height="30" rx="10" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-opacity="0.45"/>
+  <circle cx="150" cy="147" r="4.5" fill="currentColor"/>
+  <text x="150" y="185" text-anchor="middle" font-size="10.5" opacity="0.8">CoM</text>
+  <line x1="150" y1="147" x2="250" y2="147" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="200" y="164" text-anchor="middle" font-size="11" opacity="0.85">p</text>
+  <circle cx="250" cy="147" r="3" fill="currentColor" fill-opacity="0.6"/>
+  <line x1="250" y1="147" x2="250" y2="66" stroke="#2aa198" stroke-width="2.2" marker-end="url(#w-arw)"/>
+  <text x="258" y="76" font-size="12" font-weight="600" fill="#2aa198">f</text>
+  <text x="185" y="40" text-anchor="middle" font-size="11.5" opacity="0.8">force applied at the rotor</text>
+  <text x="350" y="154" text-anchor="middle" font-size="22" opacity="0.6">=</text>
+  <rect x="430" y="132" width="170" height="30" rx="10" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-opacity="0.45"/>
+  <circle cx="480" cy="147" r="4.5" fill="currentColor"/>
+  <text x="480" y="185" text-anchor="middle" font-size="10.5" opacity="0.8">CoM</text>
+  <line x1="480" y1="147" x2="480" y2="66" stroke="#2aa198" stroke-width="2.2" marker-end="url(#w-arw)"/>
+  <text x="488" y="76" font-size="12" font-weight="600" fill="#2aa198">f</text>
+  <path d="M516 128 A 40 40 0 1 1 505 178" fill="none" stroke="#d4694a" stroke-width="2" marker-end="url(#w-arw-c)"/>
+  <text x="556" y="120" font-size="12" font-weight="600" fill="#d4694a">M = p × f</text>
+  <text x="515" y="40" text-anchor="middle" font-size="11.5" opacity="0.8">same force at the CoM, plus a moment</text>
+</svg>

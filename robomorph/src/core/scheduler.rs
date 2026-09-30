@@ -18,7 +18,7 @@
 //!   they run their own RX / TX threads).
 //!
 //! Vocabulary: a *processes pipeline* is this execution unit of the scheduler. It is not a
-//! *robotics pipeline* (a functional domain such as motor control, `docs/src/pipelines/`), which
+//! *robotics pipeline* (a functional domain such as motor control, `docs/docs/pipelines/`), which
 //! runs on one or more processes pipelines.
 //!
 //! Design rule learned in practice: a producer and its consumer must live in the SAME processes

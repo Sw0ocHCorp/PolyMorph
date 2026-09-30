@@ -1,0 +1,8 @@
+{
+  // Editor support and `npm run typecheck` only: Docusaurus compiles TS itself.
+  "extends": "@docusaurus/tsconfig",
+  "compilerOptions": {
+    "baseUrl": "."
+  },
+  "exclude": [".docusaurus", "build"]
+}

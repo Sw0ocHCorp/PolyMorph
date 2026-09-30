@@ -1,0 +1,35 @@
+<svg class="diagram" viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="One scheduler pass: four processes executed in registration order, connected by the pipe, with broadcast channels underneath">
+  <defs>
+    <marker id="s-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="s-arw-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#4a90d9" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <text x="52" y="26" font-size="11.5" opacity="0.75">one pass — every process due, in registration order</text>
+  <rect x="52" y="40" width="132" height="60" rx="5" fill="currentColor" fill-opacity="0.06" stroke="#cb8b1e" stroke-width="1.2"/>
+  <text x="118" y="66" text-anchor="middle" font-size="12" font-weight="600">osprai</text>
+  <text x="118" y="84" text-anchor="middle" font-size="10.5" opacity="0.75">publish pose</text>
+  <rect x="200" y="40" width="112" height="60" rx="5" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.35"/>
+  <text x="256" y="66" text-anchor="middle" font-size="12" font-weight="600">remote</text>
+  <text x="256" y="84" text-anchor="middle" font-size="10.5" opacity="0.75">poll gamepad</text>
+  <rect x="328" y="40" width="132" height="60" rx="5" fill="currentColor" fill-opacity="0.06" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="394" y="66" text-anchor="middle" font-size="12" font-weight="600">attitude</text>
+  <text x="394" y="84" text-anchor="middle" font-size="10.5" opacity="0.75">law → wrench</text>
+  <rect x="476" y="40" width="132" height="60" rx="5" fill="currentColor" fill-opacity="0.06" stroke="#2aa198" stroke-width="1.2"/>
+  <text x="542" y="66" text-anchor="middle" font-size="12" font-weight="600">mixer</text>
+  <text x="542" y="84" text-anchor="middle" font-size="10.5" opacity="0.75">allocation</text>
+  <line x1="184" y1="70" x2="196" y2="70" stroke="currentColor" stroke-width="1.3" marker-end="url(#s-arw)"/>
+  <line x1="312" y1="70" x2="324" y2="70" stroke="currentColor" stroke-width="1.3" marker-end="url(#s-arw)"/>
+  <line x1="460" y1="70" x2="472" y2="70" stroke="#4a90d9" stroke-width="1.6" marker-end="url(#s-arw-d)"/>
+  <text x="468" y="30" text-anchor="middle" font-size="10.5" fill="#4a90d9">pipe: wrench</text>
+  <path d="M118 100 L118 140 L388 140" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#s-arw)"/>
+  <text x="150" y="156" font-size="10.5" opacity="0.75">telemetry channel — Pose (q, ω)</text>
+  <path d="M542 100 L542 190 L112 190 L112 178" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#s-arw)"/>
+  <text x="330" y="206" text-anchor="middle" font-size="10.5" opacity="0.75">command channel — applied on the next pass (one-cycle actuation delay)</text>
+  <line x1="52" y1="230" x2="608" y2="230" stroke="currentColor" stroke-opacity="0.4" stroke-width="1"/>
+  <line x1="52" y1="224" x2="52" y2="236" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.2"/>
+  <line x1="608" y1="224" x2="608" y2="236" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.2"/>
+  <text x="330" y="246" text-anchor="middle" font-size="10.5" opacity="0.7">period T = 10 ms at 100 Hz — then sleep until the next due instant</text>
+</svg>

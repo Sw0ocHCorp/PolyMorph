@@ -1,7 +1,7 @@
 //! Attitude controller: geometric PD on the quaternion error + gravity feedforward
-//! (stabilize mode). Theory and validation: `docs/src/controle/attitude.md`.
+//! (stabilize mode). Theory and validation: `docs/docs/pipelines/motor-control/attitude-controller.mdx`.
 //!
-//! Notation (also in `docs/src/glossaire.md`): q attitude body->world, omega gyro (body, rad/s),
+//! Notation (also in `docs/docs/glossary.mdx`): q attitude body->world, omega gyro (body, rad/s),
 //! q_d / omega_d setpoints, e_R rotation-vector error (rad), tau / zeta tunings, alpha desired angular
 //! acceleration (rad/s^2), I inertia matrix, M moments (N.m), m mass, g gravity.
 

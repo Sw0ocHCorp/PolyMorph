@@ -1,0 +1,108 @@
+# Extending this documentation
+
+This documentation is meant to grow one robotics pipeline at a time. The conventions below keep it consistent. It is a [Docusaurus](https://docusaurus.io/) site: pages are MDX (Markdown that may contain React components), and the site builds to static HTML.
+
+## Structure
+
+```
+docs/
+├── docs/                         the pages (.mdx)
+│   ├── introduction.mdx          served at the site root
+│   ├── framework/                the general stack — anything every pipeline uses
+│   ├── math/                     mathematical concepts, one page per family of ideas
+│   ├── pipelines/
+│   │   └── <name>/               one directory per robotics pipeline
+│   │       ├── overview.mdx      data flow, contracts, status
+│   │       ├── <component>.mdx   one page per component
+│   │       ├── roadmap.mdx       what is not built yet, and why it belongs there
+│   │       ├── validation.mdx    the acceptance ladder and its numeric criteria
+│   │       ├── lessons.mdx       bugs met, their mechanism, the rule that follows
+│   │       └── img/              the diagrams of these pages
+│   ├── simulation/               bridges to simulators and hardware
+│   └── glossary.mdx
+├── sidebars.ts                   the navigation: order and labels of the pages
+├── src/components/               interactive components (e.g. StepResponse)
+├── src/css/custom.css            theme: palette, figures, callouts
+└── scripts/sync-changelog.mjs    copies ../CHANGELOG.md into the /changelog page
+```
+
+A new robotics pipeline (perception, navigation, planning) gets its own directory under `pipelines/` and its own category in `sidebars.ts`. Mathematics **shared** by several pipelines goes to `math/`; mathematics **specific** to one pipeline stays inside it.
+
+Adding a page takes two steps: create the `.mdx` file, then list its id (its path without the extension, e.g. `pipelines/motor-control/mixer`) in `sidebars.ts`, at its place in the reading order.
+
+## Writing rules
+
+- **English**, like the source comments. The code is the reference for names; prose explains why.
+- **Every symbol used in a formula is defined** — its type and shape (scalar, 3-vector, matrix), its unit, its frame, and the code field that carries it.
+  - A pointer to a field is not a definition.
+  - If the field's name is misleading, say so explicitly.
+  - Add the symbol to the [glossary](glossary.mdx).
+- **State the *why*, not just the *what***. The code already says what happens. This documentation exists for the reasoning that produced it, and for the alternatives that were rejected.
+- **Numbers belong in tables**, not in prose.
+- **A rule learnt from a bug goes in two places**: the mechanism in the component's page, and the symptom → cause → rule row in `lessons.mdx`.
+- **Check a change against the [paradigm](framework/paradigm.mdx)**, and cite the rule ids (`P1`…`P10`) where they apply.
+
+## Links
+
+Link to another page by its **file path**, with the extension: `[The mixer](../pipelines/motor-control/mixer.mdx)`. Docusaurus turns it into the right URL, and the build **fails** on a link to a page or an anchor that does not exist (`onBrokenLinks`, `onBrokenAnchors` and `onBrokenMarkdownLinks` are all set to `throw`).
+
+## Diagrams
+
+A diagram is an **SVG file** in the `img/` folder next to its page. It is imported as a React component and rendered inline in the page, which is what lets it follow the light/dark theme:
+
+```mdx
+import Diagram1 from './img/mixer-1.svg';
+
+<figure>
+<Diagram1 />
+<figcaption>What the figure shows, in one sentence.</figcaption>
+</figure>
+```
+
+Inside the SVG:
+
+- give the `<svg>` the class `diagram` and a `viewBox` (700 units wide is the text width);
+- use `currentColor` for text and neutral strokes so the figure follows the theme; the accent colours `#4a90d9` (blue), `#2aa198` (teal), `#cb8b1e` (amber), `#d4694a` (coral) and `#8b7cd8` (purple) read on both backgrounds;
+- fill boxes with `fill="currentColor" fill-opacity="0.06"` rather than a fixed colour;
+- **marker ids must be unique across the whole site** (`p-arw`, `s-arw`, …): once inlined, two diagrams on the same page share one HTML document, and a duplicated id makes one diagram draw the other's arrow heads. The SVGO optimiser is configured *not* to rename ids (`cleanupIds: false` in `docusaurus.config.ts`) for the same reason;
+- add `role="img"` and an `aria-label` describing what the figure shows.
+
+Curves that come from a formula (step responses, trajectories) are **computed**, never drawn by hand: either by a short script, or by an interactive component such as `<StepResponse />` (`src/components/StepResponse`), which evaluates the closed-form response.
+
+## MDX pitfalls
+
+MDX is stricter than plain Markdown. Outside code spans and code blocks:
+
+- `{` and `}` open a JavaScript expression: write them inside backticks;
+- `<` followed by a letter opens a JSX tag: write `Vec<T>` or `Arc<Mutex>` inside backticks;
+- HTML comments `<!-- -->` are not allowed: use `{/* … */}`.
+
+The build reports the file and line of any such error.
+
+## Building
+
+Requires Node.js ≥ 20 (installed through `nvm` on the development machine: `source ~/.nvm/nvm.sh` first in a non-interactive shell).
+
+```bash
+cd docs
+npm install          # once, and after any change to package.json
+npm run start        # live preview on http://localhost:3000, reloads on save
+npm run build        # static site in docs/build/ (git-ignored), fails on any broken link
+```
+
+## The changelog page
+
+The [changelog](/changelog) page is **generated** from the repository's `CHANGELOG.md` by `scripts/sync-changelog.mjs`.
+- The script runs automatically before `start` and `build`.
+- The root file stays the only source. Never edit `src/pages/changelog.md`: it is git-ignored and overwritten.
+- Under `npm run start`, run `npm run sync-changelog` to refresh the page after editing `CHANGELOG.md`.
+- The changelog is read as plain CommonMark, not MDX (`markdown.format: 'detect'`). The pitfalls above therefore do not apply to it.
+
+## Keeping the documentation and the code in step
+
+The source comments carry the *local* reasoning (why this line, this guard, this order) and point here for the theory. This documentation carries the *global* reasoning. When a design decision changes:
+
+1. update the component page and, if the decision is architectural, `framework/conventions.mdx` and the [paradigm](framework/paradigm.mdx);
+2. update the affected `// NOTE:` comments in the code;
+3. if a bug motivated the change, add the row to the pipeline's `lessons.mdx`;
+4. describe the change in `CHANGELOG.md`, in the commit that makes it.

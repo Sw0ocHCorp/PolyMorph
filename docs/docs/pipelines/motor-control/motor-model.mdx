@@ -1,0 +1,105 @@
+import Diagram1 from './img/motor-model-1.svg';
+import Diagram2 from './img/motor-model-2.svg';
+
+# The motor model
+
+Files: `robomorph/src/control/motion/motor_controller.rs` (efforts) and `motors_mixer.rs` (transform resolution).
+
+## The motor tree
+
+A vehicle is described as a **tree**: *root* motors mounted on the airframe (`parent_id = 0`), and *child* motors mounted on other motors.
+
+<figure>
+<Diagram1 />
+<figcaption>The OSPRAI tree. Only the data changes from one vehicle to another; the traversal does not.</figcaption>
+</figure>
+
+## Step 1 — resolve every motor's pose in the body frame
+
+Each motor is described **at rest, in its parent's frame** (`relative_location`, `relative_orientation`). Its absolute body-frame pose is built root → leaves:
+
+```
+orientation :  R_j = R_parent · R_j^rel · Rot(e_j, θ_j)
+position    :  p_j = p_parent + R_parent · p_j^rel
+root        :  R_j = R_j^rel · Rot(e_j, θ_j)        p_j = p_j^rel + p_com
+```
+
+Two things that are easy to get wrong:
+
+- a joint's angle `θ_j` is composed **on the right** of `R_j^rel`, because it is a rotation about the joint's *own* axis, expressed in its own frame;
+- `p_j^rel` is expressed in the **parent's** frame: it is rotated by `R_parent`, never by `R_j`.
+
+`Rot(e_j, θ_j)` leaves `e_j` unchanged, so a joint's axis seen from the body does not depend on its own angle. The `p_com` offset on root motors is what makes every lever arm measured from the centre of mass.
+
+## Step 2 — effectiveness column and work vector
+
+This is the central concept of the mixer, and the source of most questions. `compute_motor_efforts` returns **two** objects per motor, of different natures:
+
+| | Effectiveness column `a_j` | Work vector `w_j` |
+|---|---|---|
+| Question answered | *"if I add **one unit** of command on this motor, what wrench does the vehicle gain?"* | *"what wrench does this motor produce **right now**?"* |
+| Nature | a **slope** (sensitivity, derivative) | a **value** |
+| Unit | wrench per N (thruster) or per rad (joint) | N and N·m |
+| Used for | a column of the solver's matrix `A` | summed over the roots → the vehicle's current wrench |
+
+<figure>
+<Diagram2 />
+<figcaption>A lever keeps its lever arm when nobody pushes on it. That is why a thruster can start from zero.</figcaption>
+</figure>
+
+### The thruster
+
+Notation: `fhat = R_j · e` is the thrust direction in the body frame (unit), `p` the motor's position from the CoM, `k_m` the reaction torque per newton (signed by the propeller's spin direction), and **`T` the thrust the rotor produces right now, in newtons** — `feedback.current_value` for a thruster, reconstructed by the vehicle bridge from the measured rotor speed (`T = k·ω²`).
+
+```
+column       a = [ fhat ; p × fhat + k_m · fhat ]      pure geometry
+work vector  w = T · a                                  linear in T
+```
+
+- `p × fhat` is the lever arm of the thrust about the CoM;
+- `k_m · fhat` is the propeller's reaction torque on the airframe, carried along the thrust axis. Two counter-rotating rotors must have **opposite** `k_m`, otherwise the model sees a yaw torque the vehicle does not produce.
+
+The essential point: **the column exists even with the rotor stopped.** `T = 0` gives `w = 0 · a = 0`, while `a` is intact. A non-zero slope at a point of zero value is unremarkable — `f(T) = T·a` is zero at `T = 0` and still has slope `a` there. Because `w` is strictly linear in `T`, the column is **exact for any increment**, which is why a thruster's decision variable may jump straight to its final value.
+
+### The angular joint
+
+A joint **produces no wrench of its own**: it reorients what its children produce. Notation: `ahat = R_j · e` the rotation axis in body, `q = p_j` the pivot, and for each child `ci`: `p_ci` its position, `f_ci` its current force (read from its work vector), `m_ci = k_m,ci · f_ci` its intrinsic torque.
+
+```
+work vector  w = Σ_ci w_ci                              (the joint adds nothing)
+column       a = dw/dθ                                  (derivative of the subtree wrench)
+
+  force part  :  dF/dθ = ahat × f_ci
+
+  moment part, child is a thruster:
+      dM/dθ = (ahat × (p_ci − q)) × f_ci      the lever arm changes: the child swings along an arc
+            + p_ci × (ahat × f_ci)            the force direction turns, at the same lever arm
+            + ahat × m_ci                     the intrinsic torque turns too
+
+  moment part, child is another joint: its wrench already aggregates its own subtree, so
+      m_ci  = M_ci − q × f_ci                 the subtree moment moved to the pivot
+      dM/dθ = ahat × m_ci + q × (ahat × f_ci)
+```
+
+Both writings are the same formula (check it with the identity `ahat × (u × f) = (ahat × u) × f + u × (ahat × f)`).
+
+**Every term is linear in `f_ci`.** That is the algebraic reason for the behaviour that surprises everyone on the first run:
+
+> **Why the arms have a zero effort vector at the first cycle while the rotors do not.**
+> A rotor has an *intrinsic slope*: its column is pure geometry, available before it even spins. An arm only has the slope its child lends it: both its column **and** its work vector equal `(child thrust) × (geometry)`. Rotors stopped ⇒ `f_ci = 0` ⇒ zero column, zero work vector ⇒ the arm has **no authority at all** and sits out. On the next cycle the feedback reports real thrust, the arms' columns become non-zero and they can take part — but they only move if the residual contains something they can serve (yaw, pitch); while level, their increments stay ≈ 0.
+
+A joint's column is a **tangent**: it only describes reality for a small angle. Keeping the increment inside that domain is the solver's job (trust region — see [the mixer](mixer.mdx)).
+
+### Design consequences
+
+- **`min_value > 0` on rotors** (0.1 N on the OSPRAI): since a joint borrows its authority from its child's thrust, letting a rotor stop in flight would silently remove the arm from the allocation.
+- **The mixer works in efforts, never in rotor speeds.** `current_value` is already a thrust; applying `k·ωⁿ` a second time would square a force. The effort law and its inverse live at the hardware boundary.
+- **A wrong feedback is a wrong plant model**: the current work vector is rebuilt from the feedbacks, and it is the solver's linearisation point.
+
+## Traversal order
+
+Step 1 walks the tree **root → leaves** (a child's pose needs its parent's). Step 2 walks **leaves → root** (a joint's column needs its children's work vectors). The mixer sorts motors by depth so both orders hold whatever the `HashMap` iteration order is.
+
+## Utilities
+
+`working_axis_to_vec3` / `_i32_` give a motor's own unit axis (`e_j`) from its `WorkingAxis`. `quaternion_to_euler` is for display only — never used by a control law.

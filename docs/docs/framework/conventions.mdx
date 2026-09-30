@@ -1,0 +1,69 @@
+import Diagram1 from './img/conventions.svg';
+
+# Conventions and invariants
+
+These rules govern how data circulates between components. Each was learnt from a real bug — see [Lessons learned](../pipelines/motor-control/lessons.mdx).
+
+## Setpoints and measurements are not handled the same way
+
+Every controller has two kinds of inputs:
+
+| Input | Comes from | Behaviour when nothing fresh arrives |
+|---|---|---|
+| **Setpoint** | the stage above, slower | **hold the last one** (zero-order hold) |
+| **Measurement** | a sensor / the simulator | do not compute; keep it only to know its age |
+
+<figure>
+<Diagram1 />
+<figcaption>A cascade is multi-rate by construction; holding the setpoint is the correct semantics, not a workaround.</figcaption>
+</figure>
+
+**Setpoints are held.** Between two updates the downstream stage serves the last known setpoint at full rate — that is exactly what makes an inner loop look fast to the outer one. The hold adds at most one *upstream* period of delay, which is negligible because upstream is the slow one. Every controller therefore stores its last setpoint in its struct; this is legitimate state, since it only remembers and cannot wind up.
+
+**Measurements are not held for computing.** A loop that computes on a stale measurement does not servo faster; it servos **at the measurement rate**. Worse, a derivative term fed a stale gyroscope reading is a fake derivative. For a critical loop the measurement must arrive **at least as fast as the controller runs**. On a tick with no fresh measurement — which must be exceptional — the controller **abstains** and the downstream stage holds.
+
+## Missing data is never a zero
+
+A controller that cannot compute must **never** publish a default value. A null wrench is not an abstention: it is the active order *"cut everything"*.
+
+> Historical bug: on ticks with no fresh telemetry the attitude stage published `WorkVec::default()`. The mixer executed it faithfully and the rotors alternated at loop rate between "hold the vehicle up" and "idle".
+
+The rule is `Option::None` for *nothing to say*, and the consumer holds. Behaviour before the *very first* setpoint must be **explicit and deliberate** (publish nothing until the first datum, or an initial setpoint written down in plain sight) — never a `Default::default()` nobody chose.
+
+## Equal frequencies are not synchronised
+
+Two threads at the same nominal frequency **never stay in phase**: their scheduling jitter makes them slide against each other, and on each slip of one period a tick receives 0 messages while another receives 2. This **beat** was measured at 30 empty / 30 double ticks out of 454.
+
+Two ways to remove it:
+
+1. **Same processes pipeline, producer registered before consumer.** Processes then share one clock and run in order: a value published and consumed **in the same pass, by construction**. This is the architecture in use.
+2. **Strictly faster producer** (≥ 2×), for instance publishing from a sensor callback. Useful when producer and consumer must live on different threads.
+
+From the control point of view, equal frequencies are healthy: the cascade's time-scale separation lives in the time constants, not in the tick rates. The only constraint is the floor of the fastest loop (`τ ≥ 10·T`).
+
+## Two transports, two contracts
+
+| Mechanism | Guarantee | Used for |
+|---|---|---|
+| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass of the same processes pipeline | attitude → mixer |
+| **broadcast channel** (tokio) | asynchronous, non-blocking, bounded capacity, `Lagged` when a receiver falls behind | telemetry, motor feedback, commands |
+
+A `Lagged` error means *"messages were skipped, carry on"*. Treating it as a termination condition kills the consumer silently.
+
+## Units and frames
+
+- The control chain works in **efforts**: newtons for a thruster, radians for a joint. Motor-native units (rotor speed, PWM) exist only at the hardware boundary.
+- A message that carries a unit must **declare** it (`MotorCommandType`). Emitting newtons under a `VELOCITY` label makes the message lie.
+- Any quantity known in the world frame must pass through `q⁻¹` before being handed to a component that speaks the body frame.
+- Check dimensional homogeneity on every equation written. An equation whose units do not balance is wrong before it runs — that check caught an inertia factor left at 1.
+
+## Numerical safety
+
+- **Guard the denominator, never the result.** A `NaN` is unordered: `NaN <= ε` is *false*, so a guard placed after the division never fires. `NaN`s are prevented, not repaired.
+- **Never publish a non-finite command.** Gazebo's rotor model keeps a `NaN` in its first-order filter for the rest of the run; a real ESC does not recover on its own either.
+- **Never compare floats with `==`** in tests; always use a tolerance.
+- The norm of the accelerometer is a free state detector: ≈ 9.81 m/s² when supported, ≈ 0 in free fall.
+
+## Period budget
+
+Execution times add up inside the period (10 ms at 100 Hz). A `println!` is a blocking call; a very verbose stage can overrun a pass, and an overrun shifts process phases and breaks the pipe. Verbose output stays behind a flag, and a counter of late passes is the right health indicator.

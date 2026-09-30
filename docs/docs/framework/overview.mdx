@@ -1,0 +1,55 @@
+import Diagram1 from './img/overview.svg';
+
+# Architecture overview
+
+## Layers
+
+<figure>
+<Diagram1 />
+<figcaption>The library knows nothing about Gazebo; the binary knows everything vehicle-specific.</figcaption>
+</figure>
+
+## Crates
+
+| Crate | Role |
+|---|---|
+| `robomorph/` | The generic library: scheduler, messages, communications, control (motor model, mixer, attitude, PID, gamepad). No dependency on Gazebo. |
+| `gazebo_simulation/gazebo_vehicles_controller/` | The simulation binary: instantiates the processes pipeline for the OSPRAI and bridges to Gazebo Harmonic through `gz-transport` (`OspraiController`). |
+| `gazebo_simulation/vehicles/osprai/` | The vehicle's SDF model: geometry, inertia, sensors, rotor plugins. |
+| `gazebo_simulation/environments/` | The Gazebo world. |
+| `companion/` | Empty shell today (future companion software). |
+
+## Library modules
+
+```
+robomorph/src
+├── core/scheduler.rs              Process, ProcessesPipeline, Scheduler
+├── messages/
+│   ├── registered_message.rs      AnyMessage, MessageType, Vec3, UnitQuat, Translatable
+│   ├── motor_messages.rs          WorkVec, MotorModel, MotorFeedBack, MotorCommand, enums
+│   ├── pose_messages.rs           Pose, IMUMeasurements, GNSSMeasurement, Transform
+│   └── lidar_messages.rs          LidarMeasurements, Ray
+├── communications/
+│   ├── interface.rs               HardwareInterface, encode_frame / decode_frame
+│   └── udp_interface.rs           UdpInterface (RX / TX threads)
+└── control/
+    ├── pid_controller.rs          scalar PIDController
+    ├── joystick/                  RemoteControl, XboxPadControl (gilrs)
+    └── motion/
+        ├── motion_controller.rs   MotionController trait, VehicleKinematicConfig, GRAVITY
+        ├── motor_controller.rs    MotorController: effectiveness columns and work vectors
+        ├── motors_mixer.rs        MotorsMixer: control allocation
+        └── attitude_controller.rs AttitudeController: attitude law
+```
+
+## The execution model in one paragraph
+
+Everything that runs periodically is a **`Process`**. Processes are grouped in a **processes pipeline** (`ProcessesPipeline`), which owns one clock and executes them in registration order. A `Scheduler` runs one processes pipeline on the caller's thread (the main pipeline) and any number of others on dedicated threads (the side pipelines). Two transport mechanisms connect processes: the **pipe** (the value returned by one process becomes the input of the next one in the same processes pipeline) and **broadcast channels** (asynchronous, non-blocking, used across processes pipelines and with the sensor callbacks). See [The scheduler](scheduler.mdx) and [Conventions and invariants](conventions.mdx).
+
+## Where the boundary lies
+
+| Generic (in `robomorph`) | Vehicle-specific (in the binary) |
+|---|---|
+| control laws, allocation, motor model, scheduler, messages | the motor tree, mass / inertia / centre of mass, the effort law that converts to actuator units, topic names |
+
+The boundary is strict and load-bearing: **the mixer works in efforts (newtons, radians) and knows nothing about rotor speeds.** The law `T = k·ωⁿ` and its inverse live in the vehicle controller, at the hardware boundary. Publishing newtons under a `VELOCITY` label would make the message lie about its own unit.

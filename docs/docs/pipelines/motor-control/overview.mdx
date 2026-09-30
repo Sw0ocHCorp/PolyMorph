@@ -1,0 +1,47 @@
+import Diagram1 from './img/overview.svg';
+
+# Motor control: overview
+
+The first robotics pipeline of the stack. It answers one question: **given a desired attitude, what command should each motor receive?**
+
+## Data flow
+
+<figure>
+<Diagram1 />
+<figcaption>Solid arrows: the scheduler pipe, within one pass. Dashed arrows: broadcast channels.</figcaption>
+</figure>
+
+All four processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → attitude → mixer`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx).
+
+## Stage contracts
+
+| Stage | Measurement | Setpoint | Output | Frame |
+|---|---|---|---|---|
+| [Attitude controller](attitude-controller.mdx) | `q`, `ω` (IMU) | `q_d` | wrench `[f_body ; M]` | body |
+| [Mixer](mixer.mdx) | motor feedbacks (efforts) | wrench | one command per motor | body → per-motor |
+| [Vehicle controller](../../simulation/gazebo.mdx) | — | motor efforts | actuator units | hardware |
+
+The **wrench** is the contract that makes each side replaceable: the mixer does not know what commands it, the attitude stage does not know which vehicle executes it.
+
+## What exists and what does not
+
+| | Status |
+|---|---|
+| Attitude loop (stabilize) + gravity feedforward | built, validated up to the static-equilibrium rung |
+| Control allocation over an arbitrary motor tree | built, validated on the OSPRAI |
+| Velocity loop (`SpeedController`) | written, not yet validated — see [Lessons learned](lessons.mdx) |
+| Force → attitude resolver | [specified](resolver.mdx), being built |
+| Position loop | [planned](roadmap.mdx) |
+| Arming / spool-up sequencing, failsafe, data-age supervision | not started — belongs to a supervisor |
+
+## The one-cycle delay
+
+Commands computed in pass *k* are applied in pass *k+1*: the vehicle controller drains the command channel at the start of its `exec`. Every discrete controller pays a computation delay somewhere; putting it on actuation rather than measurement keeps the critical loop reading the freshest possible state, and it is covered by the `τ ≥ 10·T` margin.
+
+## Reading order
+
+1. [The motor model](motor-model.mdx) — the kinematic tree, and the distinction between an effectiveness column and a work vector. Read this before the mixer.
+2. [The mixer](mixer.mdx) — the allocation itself.
+3. [The attitude controller](attitude-controller.mdx) — the control law.
+4. [The force → attitude resolver](resolver.mdx) — how a force becomes an attitude setpoint, for any vehicle.
+5. [Roadmap](roadmap.mdx), then [Validation](validation.mdx) and [Lessons learned](lessons.mdx).

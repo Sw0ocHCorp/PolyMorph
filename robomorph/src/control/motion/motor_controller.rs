@@ -15,7 +15,7 @@
 //! no authority at all and sits out of the allocation until the rotors' feedback reports thrust.
 //!
 //! Full derivation and notation: the NOTATION block in `motors_mixer.rs` and
-//! `docs/src/controle/modele-moteur.md`.
+//! `docs/docs/pipelines/motor-control/motor-model.mdx`.
 
 use std::{collections::HashMap, fmt::{Display, Formatter}};
 

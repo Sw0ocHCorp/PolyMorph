@@ -1,0 +1,123 @@
+# The paradigm: rules and review checklist
+
+The stack rests on a small number of rules. Each one was either decided deliberately or learned from a bug. This page states them once, with an id, so that:
+
+- the code can cite them where it applies them (`// [P3] abstain: never a zero wrench`);
+- a code review can check a change against them, one line each (see the [checklist](#review-checklist) at the end).
+
+:::info Status
+Proposed on 2026-09-30 from the decisions already recorded in this documentation. **To be validated by the maintainer**; until then the ids may still change.
+:::
+
+## The rules
+
+### P1 — The stack is generic: a vehicle is data
+
+**Rule.** Nothing in `robomorph` knows which vehicle it drives. What differs between vehicles is *described*, never *branched on*:
+- the motor tree (`MotorModel`: geometry, working axes, bounds, effort law);
+- the physical identity card (`VehicleKinematicConfig`: mass, inertia, CoM).
+
+There is no vehicle flag and no per-family subclass. What a vehicle can do is *derived* from its description, like the reachable force subspace of the [resolver](../pipelines/motor-control/resolver.mdx). Everything vehicle-specific lives in the vehicle's binary (`OspraiController`).
+
+**Why.** The OSPRAI is the validation bench, not the target. A flag would make every new vehicle a code change in the generic library.
+
+**Where.** [Architecture overview](overview.mdx), [The motor model](../pipelines/motor-control/motor-model.mdx).
+
+### P2 — The 6D wrench is the pivot contract
+
+**Rule.** Control laws output a **wrench** `[f ; M]` in the body frame. The allocation (the mixer) turns a wrench into motor efforts. Neither side knows the other:
+- the mixer does not know what commands it;
+- the control laws do not know which motors execute them.
+
+**Why.** It makes each side replaceable and testable on its own.
+
+**Where.** [Rigid-body efforts](../math/rigid-body.mdx), [The mixer](../pipelines/motor-control/mixer.mdx).
+
+### P3 — Missing data means abstain, never zero
+
+**Rule.** A stage that cannot compute returns `None`. It never publishes a zero-valued message, and the consumer holds its last setpoint (zero-order hold).
+
+**Why.** A zero is not "nothing": it is an active command, executed faithfully. A zero wrench published on ticks without fresh telemetry once made the rotors alternate between hover thrust and minimum at the loop rate.
+
+**Where.** [Lessons learned](../pipelines/motor-control/lessons.mdx), `MotionController::compute_command_law`.
+
+### P4 — One processes pipeline, one clock
+
+**Rule.** A producer and its consumer live in the **same processes pipeline**, the producer registered first. The pipe only exists within one pass.
+
+A pass that overruns its period scrambles the order, so per-cycle printing stays behind a `verbose` flag.
+
+**Why.** Two pipelines at the same nominal frequency on two threads drift in phase, and the consumer sees empty and doubled ticks (a beat).
+
+**Where.** [The scheduler](scheduler.mdx), [Conventions and invariants](conventions.mdx).
+
+### P5 — Gains are time constants; mass and inertia come last
+
+**Rule.** A control law is tuned with a time constant `τ` and a damping ratio `ζ`, and computes a desired **acceleration**. The vehicle enters only at the very end of the law: `M = I·α`, `f = m·a`.
+
+**Why.** The same `(τ, ζ)` then means the same response on any vehicle. The tuning describes the *behaviour*, not the vehicle.
+
+**Where.** [Cascaded control](../math/cascaded-control.mdx), [The attitude controller](../pipelines/motor-control/attitude-controller.mdx).
+
+### P6 — No per-motor tuning
+
+**Rule.** No parameter has to be characterised motor by motor. A new setting is either:
+- a vehicle-level scalar with a sensible default;
+- or derived from fields that already exist.
+
+**Why.** A per-motor table grows with every vehicle, and it drifts out of date silently.
+
+### P7 — Every quantity has a stated frame
+
+**Rule.**
+- Translation quantities (`p`, `v`, `a_d`, `f_d`) are expressed in the **world** frame.
+- Moments, angular rates and the wrench are expressed in the **body** frame.
+- The attitude `q` maps body → world.
+
+Every field and every message documents its frame and its unit.
+
+**Why.** A vector without a frame is a bug waiting for a tilted vehicle: the error is invisible while level.
+
+**Where.** [Frames, vectors and rotations](../math/frames-and-rotations.mdx), [Conventions and invariants](conventions.mdx).
+
+### P8 — The stack speaks efforts; non-linearity lives at the boundary
+
+**Rule.** Inside the stack a command is an **effort**: newtons for a thruster, radians for a joint. The conversion to the actuator's own unit (`ω = (T/k)^(1/n)` for a rotor) happens only at the hardware boundary.
+
+**Why.** Linear efforts keep the gains valid over the whole range. It also keeps each message honest about its unit.
+
+**Where.** [The motor model](../pipelines/motor-control/motor-model.mdx), [The Gazebo bridge](../simulation/gazebo.mdx).
+
+### P9 — One integrator in the cascade
+
+**Rule.** The only integrator of the cascade lives in the velocity loop. The attitude loop has none.
+
+**Why.** Constant biases (a mis-estimated mass, wind, a thrust model slightly off) are seen as a velocity drift. The velocity loop is where they can be removed, without stacking integrators that fight each other.
+
+**Where.** [Roadmap](../pipelines/motor-control/roadmap.mdx), [The attitude controller](../pipelines/motor-control/attitude-controller.mdx).
+
+### P10 — A test checks a value predicted by hand
+
+**Rule.** Every test compares against a value **computed in advance**, independently of the code, and it has been **seen failing** once.
+
+**Why.** A characterisation test that records the implementation's own output proves nothing. Every bug of the attitude stage was found by comparing against a predicted value, never by watching behaviour.
+
+**Where.** [Validation](../pipelines/motor-control/validation.mdx), [Lessons learned](../pipelines/motor-control/lessons.mdx).
+
+## Review checklist
+
+One line per rule, to go through on every change:
+
+| Check | Rule |
+|---|---|
+| No vehicle name, flag or `if vehicle == …` in `robomorph`; vehicle facts come from the motor tree or `VehicleKinematicConfig` | P1 |
+| A new stage consumes and produces the contracts in place (wrench, pose, force…) and does not reach across them | P2 |
+| Every "cannot compute" path returns `None`; no `Default::default()` message is published | P3 |
+| A new process is registered in the same processes pipeline as its producer and consumer, after its producer; per-cycle prints are behind `verbose` | P4 |
+| New gains are expressed as `(τ, ζ)` or derived from them; `m` and `I` are applied last | P5 |
+| No new per-motor parameter | P6 |
+| Every new field or message states its frame and unit; every rotation says which way it goes | P7 |
+| Efforts stay in N / rad; no actuator unit leaks into the stack | P8 |
+| No integrator outside the velocity loop | P9 |
+| Every new test states its hand-computed expected value and was seen red | P10 |
+| Every symbol of a new formula is defined: type and shape, unit, frame, code field, naming trap | [writing rules](../contributing.mdx) |

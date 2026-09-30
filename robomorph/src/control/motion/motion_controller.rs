@@ -1,8 +1,8 @@
 //! Common vocabulary of the control cascade: the `MotionController` trait implemented by every
 //! stage, the physical description of the vehicle (`VehicleKinematicConfig`) and the gravity constant.
 //!
-//! See `docs/src/concepts/cascade-asservissement.md` for the theory of the cascade and
-//! `docs/src/concepts/wrench-inertie.md` for mass / inertia.
+//! See `docs/docs/math/cascaded-control.mdx` for the theory of the cascade and
+//! `docs/docs/math/rigid-body.mdx` for mass / inertia.
 
 use std::{collections::HashMap, fmt::{Display, Formatter}, iter::Map, sync::mpsc, time::Duration};
 

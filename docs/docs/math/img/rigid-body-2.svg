@@ -1,0 +1,15 @@
+<svg class="diagram" viewBox="0 0 700 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Same mass close to the rotation axis gives a small inertia, spread far from the axis gives a large inertia">
+  <line x1="185" y1="30" x2="185" y2="150" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <line x1="515" y1="30" x2="515" y2="150" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="185" y="24" text-anchor="middle" font-size="10.5" opacity="0.75">rotation axis</text>
+  <text x="515" y="24" text-anchor="middle" font-size="10.5" opacity="0.75">rotation axis</text>
+  <line x1="150" y1="90" x2="220" y2="90" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.6"/>
+  <circle cx="150" cy="90" r="13" fill="#4a90d9" fill-opacity="0.3" stroke="#4a90d9" stroke-width="1.3"/>
+  <circle cx="220" cy="90" r="13" fill="#4a90d9" fill-opacity="0.3" stroke="#4a90d9" stroke-width="1.3"/>
+  <line x1="420" y1="90" x2="610" y2="90" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.6"/>
+  <circle cx="420" cy="90" r="13" fill="#4a90d9" fill-opacity="0.3" stroke="#4a90d9" stroke-width="1.3"/>
+  <circle cx="610" cy="90" r="13" fill="#4a90d9" fill-opacity="0.3" stroke="#4a90d9" stroke-width="1.3"/>
+  <text x="185" y="140" text-anchor="middle" font-size="12" font-weight="600">small I</text>
+  <text x="515" y="140" text-anchor="middle" font-size="12" font-weight="600">large I</text>
+  <text x="350" y="168" text-anchor="middle" font-size="10.5" opacity="0.75">same total mass — only the distance to the axis changed</text>
+</svg>

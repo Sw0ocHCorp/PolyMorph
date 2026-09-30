@@ -4,7 +4,7 @@
 //!
 //! The THEORY block below is the reference for the notation and the six principles the solver rests
 //! on (incremental formulation, meaning of a column, row normalisation, projected coordinate descent,
-//! bounds as part of the problem, unreachable demands). `docs/src/controle/mixer.md` explains it in
+//! bounds as part of the problem, unreachable demands). `docs/docs/pipelines/motor-control/mixer.mdx` explains it in
 //! prose with the lessons learnt during validation.
 
 use std::{collections::HashMap, time::Duration};

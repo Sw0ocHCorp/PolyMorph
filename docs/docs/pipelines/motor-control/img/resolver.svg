@@ -1,0 +1,30 @@
+<svg class="diagram" viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The characteristic vector v of the preferred attitude is rotated about the axis u, perpendicular to both v and the desired force direction, until it reaches the target angle with that direction">
+  <defs>
+    <marker id="r-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="r-arw-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#4a90d9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="r-arw-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#8b7cd8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="r-arw-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#d4694a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <line x1="350" y1="210" x2="350" y2="60" stroke="#4a90d9" stroke-width="2.2" marker-end="url(#r-arw-b)"/>
+  <text x="358" y="66" font-size="12" font-weight="600" fill="#4a90d9">f̂_d</text>
+  <text x="358" y="82" font-size="10" fill="#4a90d9" opacity="0.85">desired force direction</text>
+  <line x1="350" y1="210" x2="238" y2="110" stroke="#8b7cd8" stroke-width="2" marker-end="url(#r-arw-p)"/>
+  <text x="150" y="104" font-size="12" font-weight="600" fill="#8b7cd8">v_w = q_pref · v</text>
+  <text x="150" y="120" font-size="10" fill="#8b7cd8" opacity="0.85">characteristic vector, world</text>
+  <path d="M350 140 A 70 70 0 0 0 296 161" fill="none" stroke="#d4694a" stroke-width="1.6" marker-end="url(#r-arw-c)"/>
+  <text x="305" y="134" font-size="13" font-weight="600" fill="#d4694a">γ</text>
+  <circle cx="350" cy="210" r="7" fill="none" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.2"/>
+  <circle cx="350" cy="210" r="2" fill="currentColor"/>
+  <text x="350" y="240" text-anchor="middle" font-size="10.5" opacity="0.8">u = v_w × f̂_d — the rotation axis, out of the page</text>
+  <line x1="470" y1="210" x2="600" y2="210" stroke="currentColor" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="535" y="200" text-anchor="middle" font-size="10" opacity="0.7">k = 2: target γ* = 90°</text>
+  <text x="535" y="228" text-anchor="middle" font-size="10" opacity="0.7">k = 1: target γ* = 0</text>
+</svg>

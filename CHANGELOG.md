@@ -59,6 +59,27 @@ Introduced by `ba22f38` (2026-06-26) and completed by `2f81cd3` (2026-09-06). It
 - Modules no longer share locks.
 - The flip side: the pipe only holds *within one pass* of a pipeline. Hence the rule "one processes pipeline, one clock; producer registered before consumer" (see `docs`, framework → scheduler).
 
+### 2026-09-30 — Migrate the documentation to Docusaurus
+
+#### Changed
+- **Documentation engine: mdBook → Docusaurus 3.10** (`docs/`). The structure, pages and labels are unchanged: the former `SUMMARY.md` becomes `sidebars.ts`, and the pages move from `docs/src/*.md` to `docs/docs/*.mdx`. MDX is Markdown that can host React components.
+- The 17 inline SVG diagrams become files (`img/*.svg`, next to their page). They are imported through SVGR and rendered inline, so they keep following the light/dark theme.
+  - The SVGO optimiser is configured with `cleanupIds: false`. Its default renames every file's ids to `a`, `b`…, which would make two diagrams of one page share their arrow-head markers.
+- The build is strict: a broken link, anchor or Markdown link fails it.
+- `contributing` is rewritten for Docusaurus: structure, links, diagrams, MDX pitfalls, build. `docs/README.md` and the root `README.md` are updated.
+- The documentation paths cited in source comments now point to the new files; several were already stale before the migration. Comments only.
+
+#### Added
+- `framework/paradigm`: the rules P1–P10 of the stack and a code-review checklist. Status: proposed, to be validated.
+- `<StepResponse>` (`docs/src/components/StepResponse`), an interactive step response on the cascaded-control page, computed in closed form. It shows the same poles `(τ, ζ)` with two loop structures:
+  - **attitude** (D on the measured rate): 26.4 / 59.4 / 80.1 % recovered at τ / 2τ / 3τ, no overshoot;
+  - **velocity PI** (one zero): 100 % at τ, then 13.5 % overshoot at 2τ, even at ζ = 1.
+- A `/changelog` page, generated from the root `CHANGELOG.md` by `scripts/sync-changelog.mjs` before `start` and `build`. The generated copy is git-ignored. It is read as CommonMark (`markdown.format: 'detect'`), so a changelog entry cannot break the build.
+- Local search (`@easyops-cn/docusaurus-search-local`) and Mermaid support.
+
+#### Removed
+- mdBook: `book.toml`, `theme/custom.css`, `docs/src/**/*.md`, `SUMMARY.md`.
+
 ### 2026-09-30 — Rename ProcessesChain to ProcessesPipeline
 
 #### Changed

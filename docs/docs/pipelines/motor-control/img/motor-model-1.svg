@@ -1,0 +1,26 @@
+<svg class="diagram" viewBox="0 0 700 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The OSPRAI motor tree: the airframe carries two tilting arms, each carrying one rotor">
+  <rect x="290" y="24" width="120" height="42" rx="6" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.45"/>
+  <text x="350" y="50" text-anchor="middle" font-size="12" font-weight="600">base_link</text>
+  <text x="350" y="14" text-anchor="middle" font-size="10" opacity="0.7">airframe — body frame</text>
+  <line x1="330" y1="66" x2="228" y2="112" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.3"/>
+  <line x1="370" y1="66" x2="472" y2="112" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.3"/>
+  <rect x="140" y="116" width="140" height="48" rx="6" fill="#8b7cd8" fill-opacity="0.12" stroke="#8b7cd8" stroke-width="1.3"/>
+  <text x="210" y="138" text-anchor="middle" font-size="12" font-weight="600">arm_left</text>
+  <text x="210" y="155" text-anchor="middle" font-size="10" opacity="0.8">joint, rotates about Y</text>
+  <rect x="420" y="116" width="140" height="48" rx="6" fill="#8b7cd8" fill-opacity="0.12" stroke="#8b7cd8" stroke-width="1.3"/>
+  <text x="490" y="138" text-anchor="middle" font-size="12" font-weight="600">arm_right</text>
+  <text x="490" y="155" text-anchor="middle" font-size="10" opacity="0.8">joint, rotates about Y</text>
+  <line x1="210" y1="164" x2="210" y2="206" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.3"/>
+  <line x1="490" y1="164" x2="490" y2="206" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.3"/>
+  <rect x="140" y="206" width="140" height="48" rx="6" fill="#2aa198" fill-opacity="0.12" stroke="#2aa198" stroke-width="1.3"/>
+  <text x="210" y="228" text-anchor="middle" font-size="12" font-weight="600">rotor_left</text>
+  <text x="210" y="245" text-anchor="middle" font-size="10" opacity="0.8">thruster, pushes along Z</text>
+  <rect x="420" y="206" width="140" height="48" rx="6" fill="#2aa198" fill-opacity="0.12" stroke="#2aa198" stroke-width="1.3"/>
+  <text x="490" y="228" text-anchor="middle" font-size="12" font-weight="600">rotor_right</text>
+  <text x="490" y="245" text-anchor="middle" font-size="10" opacity="0.8">thruster, pushes along Z</text>
+  <text x="612" y="142" font-size="10" fill="#8b7cd8">reorients</text>
+  <text x="612" y="156" font-size="10" fill="#8b7cd8">its subtree</text>
+  <text x="612" y="232" font-size="10" fill="#2aa198">produces</text>
+  <text x="612" y="246" font-size="10" fill="#2aa198">force</text>
+  <text x="350" y="280" text-anchor="middle" font-size="10.5" opacity="0.7">a steered rover would be: steering column (joint) → left wheel, right wheel (thrusters)</text>
+</svg>

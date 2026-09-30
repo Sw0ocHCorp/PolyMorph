@@ -1,7 +1,7 @@
 # PolyMorph
 
 > **Documentation** — architecture, mathematics and control pipelines: see [`docs/`](docs/README.md).
-> Build it with `cargo install mdbook` then `cd docs && mdbook serve --open`.
+> Read it with `cd docs && npm install && npm run start` (Node.js ≥ 20). Every commit is described in [`CHANGELOG.md`](CHANGELOG.md).
 
 
 PolyMorph is an Open Source Robotic Rust ecosystem.

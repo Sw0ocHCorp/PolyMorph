@@ -1,0 +1,107 @@
+.box {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1.2rem 0 1.8rem 0;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.4rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.9rem;
+  min-width: 11rem;
+}
+
+.controls label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.plot {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.axis {
+  stroke: currentColor;
+  stroke-opacity: 0.5;
+  stroke-width: 1;
+}
+
+.guide {
+  stroke: currentColor;
+  stroke-opacity: 0.2;
+  stroke-dasharray: 4 4;
+}
+
+.setpoint {
+  stroke: currentColor;
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+
+.band {
+  fill: currentColor;
+  fill-opacity: 0.06;
+}
+
+.tick {
+  fill: currentColor;
+  font-size: 11px;
+  font-family: var(--ifm-font-family-monospace);
+  opacity: 0.75;
+}
+
+.curve {
+  fill: none;
+  stroke-width: 2.2;
+}
+
+.attitudeStroke {
+  stroke: var(--pm-blue);
+}
+
+.velocityStroke {
+  stroke: var(--pm-coral);
+}
+
+.attitude {
+  color: var(--pm-blue);
+  font-weight: 600;
+}
+
+.velocity {
+  color: var(--pm-coral);
+  font-weight: 600;
+}
+
+.tableScroll {
+  overflow-x: auto;
+  margin: 0.6rem 0 0 0;
+}
+
+.table {
+  font-size: 0.85rem;
+  margin: 0;
+  display: table;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.note {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin: 0.6rem 0 0 0;
+}

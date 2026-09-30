@@ -1,0 +1,8 @@
+<svg class="diagram" viewBox="0 0 620 96" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wire frame layout: one message-type byte followed by the protobuf payload">
+  <rect x="40" y="26" width="96" height="40" rx="4" fill="#4a90d9" fill-opacity="0.15" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="88" y="51" text-anchor="middle" font-size="12" font-weight="600">tag: 1 byte</text>
+  <rect x="136" y="26" width="444" height="40" rx="4" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-opacity="0.4" stroke-width="1.2"/>
+  <text x="358" y="51" text-anchor="middle" font-size="12">protobuf-encoded message body</text>
+  <text x="88" y="82" text-anchor="middle" font-size="10.5" opacity="0.7">MessageType</text>
+  <text x="358" y="82" text-anchor="middle" font-size="10.5" opacity="0.7">prost::Message::encode</text>
+</svg>

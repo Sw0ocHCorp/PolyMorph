@@ -1,0 +1,44 @@
+---
+slug: /
+---
+
+import Diagram1 from './img/introduction.svg';
+
+# Introduction
+
+PolyMorph is an open-source robotics stack written in Rust. This book documents the **software framework** and the **control pipelines** built on top of it: what each component does, which mathematics it implements, and why it is built the way it is.
+
+## What the stack is for
+
+The goal is a control stack that is **vehicle-agnostic**. The same code must be able to drive a multirotor, a tilt-rotor bicopter, a wheeled rover or any vehicle that can be described as a *tree of motors*. Specialisation to a given vehicle is **data** — mass, inertia, geometry, and the family of each motor — never code: there is no `UAV` subclass and no `UGV` subclass.
+
+The validation vehicle is the **OSPRAI**, a tilt-rotor bicopter (two rotors on two tilting arms) simulated in Gazebo Harmonic. It is a test bench, not a target.
+
+## The first pipeline: motor control
+
+<figure>
+<Diagram1 />
+<figcaption>The motor-control loop in one picture. Every stage produces exactly the input of the stage below it.</figcaption>
+</figure>
+
+A single 6-dimensional quantity — the **wrench** (three forces and three moments) — is the pivot of the whole chain. Above it, control laws decide what effort the vehicle should apply; below it, an allocator decides how the motors produce that effort. Neither side needs to know anything about the other, which is what makes the stack generic.
+
+## How to read this book
+
+| Part | Content |
+|---|---|
+| **Framework** | the general code stack: scheduler, message catalogue, communications, and the invariants every component must respect |
+| **Mathematical foundations** | the mathematics the pipelines rely on: frames and rotations, rigid-body efforts, cascaded control, constrained least squares |
+| **Pipeline: motor control** | the first robotics pipeline, stage by stage, with its own mathematics, its validation ladder and the bugs it produced |
+| **Simulation** | the Gazebo bridge and the vehicle model |
+| **Glossary** | every symbol with its unit and the code field that carries it |
+
+New pipelines (perception, navigation, planning) will each get their own part, built the same way: overview, components, mathematics, validation. [Extending this documentation](contributing.mdx) describes that convention.
+
+## Notation conventions
+
+- Symbols follow the [glossary](glossary.mdx). Two letters recur and must not be confused: `m` is **mass**, `M` is a **moment** (a torque).
+- Frames are always named: *body* (attached to the vehicle) or *world* (fixed). A quantity with no explicit frame is in the body frame.
+- Code is cited by file path. Source comments are in English, like this documentation; `cargo doc --open` in `robomorph/` produces the matching API documentation.
+- Diagrams are SVG files rendered inline, so they follow the site's light/dark theme. Read the site (`npm run start` in `docs/`, see [Extending this documentation](contributing.mdx)) rather than the raw `.mdx` files on GitHub, which cannot show them.
+- Every commit of the project is described in the [changelog](/changelog).

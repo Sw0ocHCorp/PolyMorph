@@ -1,7 +1,7 @@
 //! Gazebo bridge for the OSPRAI tilt-rotor bicopter: the only component that knows Gazebo. It
 //! remounts the measurements (IMU, GNSS, lidar, cameras, odometry), discovers the motor tree from the
 //! scene, converts efforts to actuator units and publishes the commands. Vehicle-specific by design:
-//! everything generic lives in `robomorph`. See `docs/src/simulation/gazebo.md`.
+//! everything generic lives in `robomorph`. See `docs/docs/simulation/gazebo.mdx`.
 
 use std::{collections::HashMap, f64::consts::PI, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::Duration};
 

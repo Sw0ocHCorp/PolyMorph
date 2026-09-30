@@ -1,0 +1,59 @@
+import Diagram1 from './img/scheduler.svg';
+
+# The scheduler
+
+File: `robomorph/src/core/scheduler.rs`.
+
+> **Vocabulary.** A **processes pipeline** (`ProcessesPipeline`) is the scheduler's execution unit: an ordered list of processes sharing one thread and one clock, linked by the pipe. It is not a **robotics pipeline**, a functional domain of the stack such as [motor control](../pipelines/motor-control/overview.mdx). A robotics pipeline runs on one or more processes pipelines. Until the rename, the type was called `ProcessesChain`.
+
+## The `Process` trait
+
+A `Process` is the unit of scheduling. Its core method is:
+
+```rust
+fn exec(&mut self, input: &Option<AnyMessage>, dt: Duration) -> Option<AnyMessage>;
+```
+
+- `input` is the **pipe**: the value returned by the previous process of the same processes pipeline, in the same pass.
+- The returned value becomes the `input` of the next process. `Some(...)` hands something over; `None` means *nothing to hand over* — an explicit abstention.
+- `dt` currently receives the process's nominal **period**, not the measured elapsed time.
+
+The remaining methods (`set_receiver`, `set_sender`, `set_period_from_freq`, `get_period`, `set_name`, `get_name`) are wiring.
+
+## One pass of a processes pipeline
+
+<figure>
+<Diagram1 />
+<figcaption>Registration order is execution order. The pipe only survives within a pass.</figcaption>
+</figure>
+
+## `ProcessesPipeline`
+
+A processes pipeline is an ordered list of `(process, next due instant)`. `run_once`:
+
+1. computes `end_instant`, the latest of the `instant + period` deadlines;
+2. loops until `end_instant` is passed: on each pass it walks the processes **in registration order**, executes those whose deadline has come (propagating the pipe), advances their deadline by one period, then sleeps until the nearest deadline.
+
+If a process is late (its next deadline is already in the past after it ran), its deadline is **reset to now**.
+
+### Three properties to know
+
+> **1. `input_state` is local to one iteration of the wait loop.** It is reset to `None` on every iteration and every call to `run_once`. The pipe is therefore only reliable when producer and consumer run **in the same pass**: same processes pipeline, same period, registered in order. Making the pipe state a field of `ProcessesPipeline` would make it reliable in every case.
+
+> **2. Resetting a late process's deadline to *now* shifts its phase** relative to the others. If a pass overruns its period (a very verbose mixer, for example), deadlines can reorder and the pipe breaks. Hence the rule: verbose output behind a flag, and watch for overruns.
+
+> **3. An empty processes pipeline spins forever**: `run_finished` is only set inside the `for` loop over the processes. Never start a processes pipeline with no process in it.
+
+## `Scheduler`
+
+- `register_process` → **main pipeline**, run on the caller's thread by `run_main_pipeline()` (the binary calls it in a `loop`).
+- `register_side_process(p, id)` → **side pipeline** `id`, run on a dedicated thread by `start_all_side_pipelines()`.
+- `register_interface` / `start_all_interfaces` → `HardwareInterface`s are *connected* (they own their threads); they are not scheduled.
+
+### Architectural rule: one processes pipeline, one clock
+
+A producer and its consumer must live **in the same processes pipeline**. Two processes pipelines at the same nominal frequency on two threads drift in phase and produce empty and double ticks — a beat, measured at 30 empty / 30 double ticks out of 454 before the pose producer joined the controllers' processes pipeline. Side pipelines are for decoupled work (heavy perception), not for the links of a control loop.
+
+## Ordering and loop delay
+
+The order `osprai → attitude → mixer` makes the attitude stage consume a **fresh** measurement, published moments earlier in the same pass, and applies the mixer's commands **on the next pass**. Every discrete controller pays a computation delay somewhere; placing it on actuation rather than on measurement is the right choice for a critical loop, and it is covered by the `τ ≥ 10·T` margin.

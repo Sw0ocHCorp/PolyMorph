@@ -6,7 +6,7 @@ use crate::vehicle_controllers::{osprai_controller::{OspraiController}, vehicle_
 
 
 /// Wiring of the simulation binary. Rules this wiring obeys (each learnt from a bug, see
-/// `docs/src/validation/lecons.md`):
+/// `docs/docs/pipelines/motor-control/lessons.mdx`):
 ///   - every stage of the control loop lives in the SAME processes pipeline (one clock) and is
 ///     registered in producer -> consumer order: osprai (publishes the pose) -> remote -> attitude
 ///     -> mixer. Two processes pipelines at the same nominal frequency on two threads drift in phase

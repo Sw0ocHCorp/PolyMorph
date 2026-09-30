@@ -1,0 +1,20 @@
+<svg class="diagram" viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Graph of the wrench produced by a thruster against its thrust: a straight line through the origin whose slope is the effectiveness column">
+  <defs>
+    <marker id="m-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <line x1="100" y1="210" x2="630" y2="210" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.1" marker-end="url(#m-arw)"/>
+  <line x1="100" y1="210" x2="100" y2="40" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.1" marker-end="url(#m-arw)"/>
+  <text x="632" y="228" text-anchor="end" font-size="11" opacity="0.85">thrust T  (N)</text>
+  <text x="104" y="36" font-size="11" opacity="0.85">wrench produced ‖w‖</text>
+  <line x1="100" y1="210" x2="560" y2="62" stroke="#2aa198" stroke-width="2.4"/>
+  <text x="470" y="72" font-size="11.5" fill="#2aa198" font-weight="600">w = T · a</text>
+  <line x1="300" y1="145" x2="400" y2="145" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <line x1="400" y1="145" x2="400" y2="113" stroke="currentColor" stroke-opacity="0.6" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="350" y="161" text-anchor="middle" font-size="10.5" opacity="0.85">ΔT</text>
+  <text x="408" y="132" font-size="10.5" opacity="0.85">‖a‖ · ΔT</text>
+  <circle cx="100" cy="210" r="6" fill="none" stroke="#d4694a" stroke-width="2"/>
+  <text x="116" y="196" font-size="11" fill="#d4694a" font-weight="600">rotor stopped</text>
+  <text x="116" y="212" font-size="10.5" fill="#d4694a">w = 0, but the slope a is unchanged</text>
+</svg>

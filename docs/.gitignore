@@ -1,1 +1,8 @@
-book/
+# Dependencies and build output
+node_modules/
+build/
+.docusaurus/
+.cache-loader/
+
+# Generated from ../CHANGELOG.md by scripts/sync-changelog.mjs (the root file is the source)
+src/pages/changelog.md

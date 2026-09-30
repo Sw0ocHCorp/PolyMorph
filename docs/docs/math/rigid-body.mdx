@@ -1,0 +1,76 @@
+import Diagram1 from './img/rigid-body-1.svg';
+import Diagram2 from './img/rigid-body-2.svg';
+
+# Rigid-body efforts: wrench, mass and inertia
+
+## The wrench: a 6D effort
+
+A **wrench** is a six-component vector that completely describes the effort applied to a rigid body:
+
+```
+w = [ fx  fy  fz  |  mx  my  mz ]
+      ─── force ──   ── moment ──
+          (N)           (N·m)
+```
+
+The first three are a **force**, the last three a **moment** (a torque). Throughout the stack a wrench is expressed in the **body** frame and its moments are taken about the **reduction point** — the centre of mass (CoM). The Rust type is `WorkVec`.
+
+The wrench is the **pivot of the chain**: the attitude controller publishes "the wrench to produce", the mixer finds the motor commands that produce it. Neither needs to know what the other is.
+
+## Why a reduction point
+
+A moment depends on the point it is computed about: the same rotor force creates a different moment measured at the CoM or at the model's origin. Every lever arm in the stack is measured from the CoM (`com_relative_location` offsets the root motors), so that the sum of all motor wrenches is directly the effort that rotates the vehicle about its centre of mass.
+
+<figure>
+<Diagram1 />
+<figcaption>Reducing an effort to the centre of mass: this is what every motor column computes.</figcaption>
+</figure>
+
+### Two meanings of the word "moment"
+
+Beware of the homonym:
+
+- a **moment** as a *torque* — the `mx, my, mz` part of a wrench, in N·m;
+- a **moment of inertia** — resistance to being spun up, in kg·m².
+
+The `moments_matrix` field of `VehicleKinematicConfig` is the matrix of **moments of inertia** (the inertia matrix), not a wrench. In formulas, `m` is mass and `M` is a moment-torque.
+
+## Mass and inertia: the "mass" of rotation
+
+The linear / angular symmetry structures the whole chain:
+
+| | Translation | Rotation |
+|---|---|---|
+| What resists | mass `m` (kg) | moment of inertia `I` (kg·m²) |
+| Newton | `F = m·a` | `M = I·α` |
+| In the config | `weight` | `moments_matrix` |
+
+Mass says how hard it is to *accelerate* the vehicle in a straight line. The moment of inertia says how hard it is to *spin* it — and unlike mass it **depends on the axis**. The unit tells the story: kg·**m²** is mass weighted by the square of its distance to the axis. A kilogram at the tip of an arm resists rotation enormously; the same kilogram at the centre barely at all.
+
+<figure>
+<Diagram2 />
+<figcaption>The skater who pulls their arms in: same mass, smaller inertia, faster spin.</figcaption>
+</figure>
+
+Hence **one inertia per axis**. On the OSPRAI the yaw inertia is about twice the roll inertia, because the arms and rotors are spread out with respect to the vertical axis. To obtain the *same* angular acceleration on both axes you must ask for twice the torque in yaw — which is exactly the information `M = I·α` injects into the law.
+
+### The 3×3 matrix, and why only the diagonal
+
+The full form is a 3×3 tensor. The diagonal (`I_xx, I_yy, I_zz`) carries the inertias *about* each axis. The off-diagonal terms (products of inertia) encode the couplings of an asymmetric mass distribution: on a lopsided vehicle a pure torque about x also produces a parasitic acceleration about y. For a roughly symmetric vehicle — nearly every drone — those terms vanish, the matrix is diagonal, and `M = I·α` decouples into three scalar lines `M_k = I_k·α_k`. That is what licenses the "one loop per axis" structure of the attitude controller. On a strongly asymmetric vehicle you would keep the full matrix product: same formula, just not simplified.
+
+### Where the numbers come from
+
+These are **physical properties of the airframe**, like mass — not tunings. In Gazebo they are declared in the SDF (`<inertia>`: `ixx, iyy, izz`, …). The controller's config must carry the **total** inertia of the vehicle (base + arms + rotors, combined through the parallel-axis theorem), not just the base link's. On real hardware: CAD or a pendulum measurement.
+
+A wrong inertia is not tuned away, it is corrected — and it is visible: if `I_config < I_real`, both gains of the attitude loop are too small by the same factor and the response becomes **both slower and less damped** (see [Validation](../pipelines/motor-control/validation.mdx)).
+
+## Row normalisation in the allocator
+
+The mixer minimises `‖A·dx − b‖²` where `b` mixes newtons and newton-metres. Adding N² and (N·m)² in one norm is dimensionally meaningless: the answer would change if lengths were expressed in millimetres. Every row is therefore divided so the residual is expressed as an **acceleration**:
+
+```
+force row       / m
+moment row k    / sqrt(m · I_k)        (m/s² seen at the radius of gyration)
+```
+
+This is not a tuning but a correctness requirement: it decides, physically rather than by unit accident, how the solver arbitrates between a force error and a moment error. The same mass and inertia therefore appear twice in the chain: at the end of the control law (`M = I·α`, `f = m·a`) and in the mixer's normalisation.

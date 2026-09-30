@@ -1,0 +1,71 @@
+/* PolyMorph documentation theme.
+ *
+ * The diagrams use `currentColor` for text and neutral strokes (they follow the theme) and five
+ * fixed accent colours that read on both backgrounds: blue #4a90d9, teal #2aa198, amber #cb8b1e,
+ * coral #d4694a, purple #8b7cd8. The same five are exposed below as tokens for components.
+ */
+
+:root {
+  /* Infima primary scale built on the diagrams' blue. */
+  --ifm-color-primary: #2f78c4;
+  --ifm-color-primary-dark: #2a6cb0;
+  --ifm-color-primary-darker: #2866a7;
+  --ifm-color-primary-darkest: #215489;
+  --ifm-color-primary-light: #4086cf;
+  --ifm-color-primary-lighter: #4a90d9;
+  --ifm-color-primary-lightest: #6ba5e1;
+  --ifm-code-font-size: 92%;
+
+  --pm-blue: #4a90d9;
+  --pm-teal: #2aa198;
+  --pm-amber: #cb8b1e;
+  --pm-coral: #d4694a;
+  --pm-purple: #8b7cd8;
+  --pm-callout-bg: rgba(128, 128, 128, 0.07);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #6ba5e1;
+  --ifm-color-primary-dark: #4f94db;
+  --ifm-color-primary-darker: #418bd8;
+  --ifm-color-primary-darkest: #2a72bd;
+  --ifm-color-primary-light: #87b6e7;
+  --ifm-color-primary-lighter: #95bfea;
+  --ifm-color-primary-lightest: #bfd8f2;
+  --pm-callout-bg: rgba(160, 160, 160, 0.09);
+}
+
+/* Figures ------------------------------------------------------------------ */
+svg.diagram {
+  display: block;
+  margin: 1.6rem auto 0.4rem auto;
+  max-width: 100%;
+  height: auto;
+}
+svg.diagram text {
+  fill: currentColor;
+  font-family: var(--ifm-font-family-monospace);
+}
+figure {
+  margin: 0 0 1.8rem 0;
+}
+figcaption {
+  text-align: center;
+  font-size: 0.88em;
+  opacity: 0.75;
+  margin-top: 0.2rem;
+}
+
+/* Tables ------------------------------------------------------------------- */
+table th {
+  text-align: left;
+}
+
+/* Callouts: a blockquote is used as a "rule / pitfall" box ------------------ */
+.markdown blockquote {
+  border-left: 3px solid var(--pm-blue);
+  background: var(--pm-callout-bg);
+  color: inherit;
+  padding: 0.6rem 1rem;
+  margin: 1.2rem 0;
+}
