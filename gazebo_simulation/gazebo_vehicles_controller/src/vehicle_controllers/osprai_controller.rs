@@ -564,6 +564,14 @@ impl VehicleController for OspraiController {
                                         // indices differ, which is what allows two &mut into the same Vec.
                                         // `j != i` above already guarantees the Ok branch.
                                         if let Ok([mc, parent_mc])= motors.get_disjoint_mut([i, j]) {
+                                            // NOTE: `relative_location` below is a COPY (Vec3 is Copy): the subtraction
+                                            // is computed and then dropped, the model is never updated. A rotor therefore
+                                            // keeps its MODEL-frame position (0, +/-0.30, 0.10) as if it were relative to
+                                            // its arm, and the mixer places it at arm + that = (0, +/-0.48, 0.20) instead
+                                            // of (0, +/-0.30, 0.10): it expects 0.48 N.m of roll per newton of differential
+                                            // thrust where the vehicle produces 0.30, i.e. only ~62 % of the demanded roll
+                                            // moment is delivered. Fix planned (brick 2): write the result back with
+                                            // `mc.set_motor_relative_location(...)`.
                                             if let Some(mut relative_location)= mc.get_motor_model().relative_location {
                                                 let mut parent_relative_location= Vec3::new(0.0, 0.0, 0.0);
                                                 if let Some(relative_loc)= parent_mc.get_motor_model().relative_location {

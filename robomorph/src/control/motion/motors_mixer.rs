@@ -263,10 +263,12 @@ impl MotionController for MotorsMixer {
         // order the motors so a parent is always processed before its children (depth ascending).
         // depth is the length of the parent_id chain up to a root (parent_id == 0), so the order stays
         // correct whatever the HashMap iteration order. Forward = root->leaves (STEP#1), reversed = leaves->root (STEP#2).
+        // 1. every motor id, in whatever order the HashMap gives them (randomised per map)
         let mut processing_order: Vec<u32>= self.motors.keys().copied().collect();
-        // the function passed to sort_by_key(...) use keys as input and return a value, used to sort the element
-        // this returned value is like the weight of a key in the list, used to order elements in list 
+        // 2. sort by a key computed for each id: the function passed to sort_by_key(...) takes an id
+        //    and returns its sorting key, here (depth, id)
         processing_order.sort_by_key(|id| {
+            // 2a. depth: walk up the parent_id chain until a root, counting the steps
             let mut depth= 0usize;
             let mut current= *id;
             while let Some(mc)= self.motors.get(&current) {
@@ -275,8 +277,12 @@ impl MotionController for MotorsMixer {
                 depth += 1;
                 if depth > self.motors.len() { break; } // guard against a malformed cyclic chain
             }
-            // the ordering criteria
-            depth
+            // 2b. the key: depth first (parents before children), then id. Without the id, motors of
+            //     equal depth (here the two arms, then the two rotors) would follow the HashMap
+            //     iteration order, which is randomised per map: two identical mixers fed the same
+            //     data would sweep their motors in different orders in STEP#3 and allocate slightly
+            //     differently - an allocation that cannot be reproduced from one run to the next.
+            (depth, *id)
         });
             
         //STEP#1:

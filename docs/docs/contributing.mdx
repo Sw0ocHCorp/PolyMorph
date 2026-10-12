@@ -23,7 +23,9 @@ docs/
 ├── sidebars.ts                   the navigation: order and labels of the pages
 ├── src/components/               interactive components (e.g. StepResponse)
 ├── src/css/custom.css            theme: palette, figures, callouts
-└── scripts/sync-changelog.mjs    copies ../CHANGELOG.md into the /changelog page
+└── scripts/
+    ├── sync-changelog.mjs        copies ../CHANGELOG.md into the /changelog page
+    └── delay_budget_reference.py the roll-axis model with delays: table and figure of cascaded-control
 ```
 
 A new robotics pipeline (perception, navigation, planning) gets its own directory under `pipelines/` and its own category in `sidebars.ts`. Mathematics **shared** by several pipelines goes to `math/`; mathematics **specific** to one pipeline stays inside it.

@@ -39,6 +39,8 @@ Every entry links an observed symptom to the mechanism that explains it and the 
 | ±5° arm flick on take-off → ~1 rad/s roll impulse → 0.85 m lateral drift | near-zero columns (tiny thrust at start-up) → step of 10¹¹⁷ → increment saturated at the trust region | **relative** guard on column norms |
 | slow constant-acceleration climb | ~0.1 % surplus between `k·ω²` and Gazebo's thrust | the bias for the velocity loop's integrator |
 | lateral travel after a roll disturbance | structural behaviour of stabilize mode: attitude holds attitude, not position; only rotor drag brakes | the velocity loop |
+| two identical mixers fed the same data allocate slightly differently (seen 3 times out of 3 on a closed-loop test, since removed) | motors of equal depth were ordered by `HashMap` iteration, randomised per map: the Gauss-Seidel sweep order, hence the allocation, changed | break ties by motor id; an allocation must be reproducible |
+| a roll-rate kick peaks 8 % higher and 20 % **earlier** than the ideal `ω₀·τ/e` at `τ` (same closed-loop test; the delay model gives 10 % and 20 %) | the actuation-delay budget (one period + rotor lag): the angle grows unopposed for a period, then the rate feedback over-brakes on a stale rate | predict with the delays counted ([the actuation-delay budget](../../math/cascaded-control.mdx#the-actuation-delay-budget)); the ideal `(τ, ζ)` response is what you ask for, not what you get |
 
 ## Communications
 
@@ -66,3 +68,4 @@ Annotating the code surfaced fragilities that have not (yet) shown up at run tim
 | `control/pid_controller.rs` | the accumulator integrates even with `i = 0`; `dt = 0` divides by zero; the derivative after a `reset` is taken against 0 |
 | `control/motion/motors_mixer.rs` | convergence criterion on the total residual norm (replace with `‖Aᵀr‖`) |
 | `control/motion/attitude_controller.rs` | the division by `‖v‖` is evaluated before the guard (harmless *only* because the guard tests `‖v‖`, not the result) |
+| `vehicle_controllers/osprai_controller.rs` | a rotor's position is never re-expressed in its arm's frame (the subtraction acts on a copy): the mixer places the rotors at (0, ±0.48, 0.20) instead of (0, ±0.30, 0.10), so only ~62 % of the demanded roll moment is produced. Fix planned in brick 2 |

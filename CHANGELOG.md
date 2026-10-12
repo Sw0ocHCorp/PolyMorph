@@ -59,6 +59,25 @@ Introduced by `ba22f38` (2026-06-26) and completed by `2f81cd3` (2026-09-06). It
 - Modules no longer share locks.
 - The flip side: the pipe only holds *within one pass* of a pipeline. Hence the rule "one processes pipeline, one clock; producer registered before consumer" (see `docs`, framework → scheduler).
 
+### 2026-10-12 — Make the mixer allocation reproducible; document the actuation-delay budget
+
+#### Fixed
+- `MotorsMixer`: motors of equal depth in the tree are now ordered by id (sort key `(depth, id)`).
+  - Before, ties followed the iteration order of a `HashMap`, which is randomised per map. Two identical mixers fed the same data could therefore sweep their motors in a different Gauss-Seidel order and allocate slightly differently.
+  - This was observed 3 times out of 3 on a temporary closed-loop test bench.
+
+#### Added
+- `math/cascaded-control`: a section **"The actuation-delay budget"**. Between measuring and acting, the chain spends one control period plus the rotor lag. The section gives the figure, the two mechanisms, and the table ideal vs with delays:
+  - roll step: 26.4 / 59.4 / 80.1 % → 26.2 / 62.2 / 81.8 % recovered at τ / 2τ / 3τ;
+  - 1 rad/s roll-rate kick: peak 0.0736 rad at 0.20 s → 0.0813 rad at 0.16 s, i.e. higher and **earlier**.
+- `docs/scripts/delay_budget_reference.py`: the roll-axis model with delays that produces that table and the figure.
+- `lessons`: rows for the non-reproducible allocation and for the delay budget. The flagged-in-code table also gets a row for the bridge's rotor-position bug: rotors at (0, ±0.48, 0.20) instead of (0, ±0.30, 0.10), so only ~62 % of the demanded roll moment is produced.
+- `osprai_controller.rs`: a `NOTE` describing that bug where it happens (comment only; the fix is planned).
+- The glossary term "actuation-delay budget", the tie-break on the mixer page, and the `scripts/` tree in `contributing`.
+
+#### Note
+- A deterministic software-in-the-loop bench was prototyped, then removed before any commit: it only served motion control. Testing stays at two levels, unit tests and Gazebo.
+
 ### 2026-09-30 — Migrate the documentation to Docusaurus
 
 #### Changed

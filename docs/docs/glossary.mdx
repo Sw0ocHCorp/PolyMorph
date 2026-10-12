@@ -53,6 +53,7 @@
 | `q_align` | `Rot(u, γ − γ*)`; `q_d = q_align ⊗ q_pref` | — |
 | `f_h` | `f_d` projected on the plane ⟂ the single authority axis (ground vehicles) | N, world |
 | `α`, `α_k` | **desired** angular acceleration (the law's output) | rad/s² |
+| actuation-delay budget | everything between measuring and acting: one control period plus the actuator lag. It shifts the real response away from the ideal `(τ, ζ)` one | s |
 | `M`, `M_k` | desired moment (torque), `I_k·α_k` | N·m |
 | `f_body` | desired force in the body frame, `q⁻¹·(0,0,m·g)` | N |
 | wrench | `[fx fy fz mx my mz]`, body frame, moments about the CoM (`WorkVec`) | N, N·m |

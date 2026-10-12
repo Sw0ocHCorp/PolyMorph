@@ -1,6 +1,7 @@
 import Diagram1 from './img/cascaded-control-1.svg';
 import Diagram2 from './img/cascaded-control-2.svg';
 import StepResponse from '@site/src/components/StepResponse';
+import DelayBudget from './img/delay-budget.svg';
 
 # Cascaded control
 
@@ -72,6 +73,43 @@ The same poles do not give the same response: the **structure** of the loop matt
   - That overshoot is not a tuning error: it is the price of acting on the error itself rather than on a measured derivative.
 
 <StepResponse />
+
+### The actuation-delay budget
+
+The responses above, and the component, assume the moment the law asks for is produced **instantly**. The real chain takes time between measuring and acting:
+
+- **one control period**, T = 10 ms. The command computed at a pass reaches the actuators at the next one, because the vehicle bridge publishes at the start of the following pass;
+- **the actuator lag**. A rotor follows its commanded speed as a first order: 12.5 ms when it accelerates, 25 ms when it slows down (Gazebo's `MulticopterMotorModel`, OSPRAI SDF).
+
+Both stay within the rules of thumb below: `τ = 0.2 s` is 20 times the period, and 8 to 16 times the rotor constant. Yet on a disturbance the effect is far from negligible:
+
+<figure>
+<DelayBudget />
+<figcaption>Roll angle of the OSPRAI after a 1 rad/s roll-rate kick. Blue: the ideal second order. Coral: the same loop with one period of delay and the rotor lag.</figcaption>
+</figure>
+
+Two mechanisms shape the coral curve:
+
+1. **During the first period nothing brakes.** The angle grows unopposed at 1 rad/s, hence a higher peak.
+2. **Then the rate feedback brakes too hard.** The moment being produced was computed from a rate measured one period earlier, plus the rotor lag, when the vehicle was still rotating faster. The loop over-brakes, the rate crosses zero sooner, and the angle turns back **earlier**.
+
+| `τ = 0.2 s`, `ζ = 1` | Ideal (instantaneous actuators) | With the delay budget |
+|---|---|---|
+| Step: fraction recovered at τ / 2τ / 3τ | 26.4 / 59.4 / 80.1 % | 26.2 / 62.2 / 81.8 % |
+| Step: overshoot | 0 | 0 |
+| Kick of 1 rad/s: peak of the angle | 0.0736 rad (4.2°) at 0.20 s | 0.0813 rad (4.7°) at 0.16 s |
+
+The step barely moves; the disturbance peak is 10 % higher and 20 % earlier. A closed-loop run of the real stack against a simulated rigid body gave the same shift (0.0798 rad at 0.16 s, see [Lessons learned](../pipelines/motor-control/lessons.mdx)).
+
+The right-hand column comes from a deliberately simple model of the roll axis, `docs/scripts/delay_budget_reference.py`. It keeps the attitude law, the one-period delay and the rotor lags, and nothing else. It also generates the figure:
+
+```bash
+python3 docs/scripts/delay_budget_reference.py --svg docs/docs/math/img/delay-budget.svg
+```
+
+:::tip What to remember
+`(τ, ζ)` describe the loop you **ask for**. The loop you **get** also contains every delay between measuring and acting. To predict what a test will measure, count that budget. When a measured response differs from the ideal one, the delay budget is the first thing to estimate, before suspecting a gain.
+:::
 
 ## τ is constrained, ζ is chosen
 

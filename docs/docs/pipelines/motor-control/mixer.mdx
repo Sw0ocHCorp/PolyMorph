@@ -66,7 +66,7 @@ The current criterion stops the sweeps when the **relative** improvement of `‖
 
 ## The full cycle (`compute_command_law`)
 
-1. Sort motors by depth in the tree.
+1. Sort motors by depth in the tree, **ties broken by motor id**. Without the tie-break, motors of equal depth would follow the iteration order of a `HashMap`, which is randomised per map: two identical mixers fed the same data would sweep their motors in different orders and allocate slightly differently.
 2. **Step 1**: resolve the `Transform`s, root → leaves.
 3. **Step 2**: leaves → root, compute `(column, work vector)` for each motor; normalise the column; sum the root work vectors into `w_current`.
 4. **Step 3**: compute the steps (with the guards), the normalised right-hand side `b = w_setpoint − w_current`, then up to 10 sweeps of projected coordinate descent.
