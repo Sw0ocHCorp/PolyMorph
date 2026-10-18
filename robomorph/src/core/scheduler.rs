@@ -57,13 +57,14 @@ pub trait Process {
     /// Execute the process task. The main task of the process
     ///
     /// `input` is the pipe: the value returned by the PREVIOUS process of the same processes
-    /// pipeline in the same pass (`None` for the first process of the pass, or when the previous one
-    /// abstained). Returning `Some` feeds the next process; returning `None` means "nothing to hand
-    /// over".
+    /// pipeline in the same pass (`None` for the first process of the pass, when the previous one
+    /// abstained, or when the previous one was not executed in this pass). Returning `Some` feeds the
+    /// next process; returning `None` means "nothing to hand over".
     ///
-    /// `dt` is meant to be the time elapsed since the previous execution, for integration.
-    // NOTE: `ProcessesPipeline::run_once` currently passes the process PERIOD as `dt`, not the
-    // measured elapsed time, so a late execution integrates with a step shorter than reality.
+    /// `dt` is the time elapsed since the previous START of this process's task, measured by its
+    /// processes pipeline: about one period in steady state, more after a skipped tick. At the first
+    /// execution there is no previous start, and `dt` is the nominal period (zero for a zero-period
+    /// process).
     fn exec(&mut self, input: &Option<AnyMessage>, dt: Duration) -> Option<AnyMessage>;
     /// Helper function that force the Process to have receiver object to receive cmd from other process or interface
     ///
@@ -81,8 +82,11 @@ pub trait Process {
     /// Every implementation computes `Duration::from_nanos(1_000_000_000 / frequency)` (integer
     /// division: 3 Hz gives 333_333_333 ns; `0` panics with a division by zero).
     fn set_period_from_freq(&mut self, frequency: u64);
-    /// Execution period of the main task, as set by `set_period_from_freq` (zero if it was never
-    /// set, in which case the processes pipeline runs the process at every pass).
+    /// Execution period of the main task, as set by `set_period_from_freq`. Zero if it was never
+    /// set: the process then has no grid of its own and FOLLOWS its predecessor in the processes
+    /// pipeline (it runs in every pass where its predecessor ran); a zero-period FIRST process runs
+    /// once per `run_once` call, in the first pass of the call (see `ProcessesPipeline::run_once`,
+    /// step 5).
     fn get_period(&self) -> Duration;
     /// Name given by `set_name`.
     fn get_name(&self) ->String;
@@ -107,8 +111,15 @@ pub struct ProcessesPipeline<P: ?Sized = dyn Process> {
     /// The first process registered in the list is executed first, the second after and so on
     ///
     /// The `Instant` is the next due instant of the process: the registration time at first, then
-    /// advanced by one period after each execution (or reset to "now" when the process is late).
-    processes: Vec<(Box<P>, Instant)>,
+    /// advanced by WHOLE periods after each execution until it is in the future (the grid: a late
+    /// process skips the ticks it missed and keeps its phase). For a zero-period process: its
+    /// predecessor's next due instant, or the end of the current call for the first process.
+    ///
+    /// The `Option<Instant>` is the instant at which the process last STARTED its task, `None`
+    /// before its first execution: the measured `dt` handed to `exec` is computed from it. Both
+    /// instants live here, next to each other, so that the processes themselves carry no
+    /// scheduling state.
+    processes: Vec<(Box<P>, Instant, Option<Instant>)>,
 }
 
 impl<P: Process + ?Sized> ProcessesPipeline<P> {
@@ -134,7 +145,7 @@ impl<P: Process + ?Sized> ProcessesPipeline<P> {
     // the process itself (`Process::get_period`), so `set_period_from_freq` must have been called
     // on it before it is added.
     pub fn add_process(&mut self, process: Box<P>) {
-        self.processes.push((process, Instant::now()));
+        self.processes.push((process, Instant::now(), None));
     }
 
     /// Run the processes pipeline one time
@@ -144,86 +155,152 @@ impl<P: Process + ?Sized> ProcessesPipeline<P> {
     /// Algorithm:
     /// 1. `end_instant` is computed at entry as the latest `(due instant + period)` over all the
     ///    processes (and never earlier than now).
-    /// 2. The `while` loop makes *passes* over the processes, in registration order, until
-    ///    `end_instant` is passed. In a pass, each process whose due instant has elapsed is executed
-    ///    and its due instant advanced by one period; the value it returns is the pipe
-    ///    (`input_state`) handed to the next process of the same pass.
-    /// 3. Between two passes the thread sleeps until the nearest due instant.
+    /// 2. The `while` loop makes *passes* over the processes, in registration order. A pass always
+    ///    runs to its end: `end_instant` is tested AFTER the pass, never between two processes, so a
+    ///    producer and the consumer registered right after it are never split into two passes.
+    /// 3. In a pass, each process that is due is executed. Its output is the pipe (`input_state`),
+    ///    handed to the NEXT process only: the pipe is emptied at the start of every pass and when a
+    ///    process is skipped, so a process only ever receives what its immediate predecessor
+    ///    produced in the same pass. Its `dt` is the measured time since its previous start (the
+    ///    nominal period at its first execution).
+    /// 4. After its execution, a process's due instant advances by whole periods until it is in the
+    ///    future (the grid): a late process skips the ticks it missed and keeps its phase.
+    /// 5. A zero-period process has no grid: it follows its predecessor (it runs when the predecessor
+    ///    ran in this pass). A zero-period FIRST process runs once per call, in the first pass of the
+    ///    call (a pass counter decides, not its due instant), and never makes the pipeline spin.
+    /// 6. Between two passes the thread sleeps until the nearest due instant.
     ///
-    /// In steady state, with every process at the same period P, one call performs one pass where
-    /// all the processes run (pipe intact), sleeps about P, then exits on the following pass.
-    // NOTE: (a) `input_state` is declared inside the `while` loop, so a value produced in one pass
-    // is lost if its consumer only becomes due in the next pass. The pipe is therefore only reliable
-    // when producer and consumer run in the same pass: same period, registered in order, same
-    // processes pipeline. The `break` on `end_instant` can also cut a pass in the middle, in which
-    // case the remaining processes run at the next call, with an empty pipe.
-    // NOTE: (b) with zero processes the `for` loop never runs, `run_finished` is never set and the
-    // `while` loop spins forever (sleeping 0 ns): an empty processes pipeline burns a whole core.
-    // NOTE: (c) when a process is late (its next due instant is already in the past once it has
-    // executed) its due instant is reset to `now`, which shifts its phase relative to the other
-    // processes of the pipeline instead of catching up.
+    /// In steady state, with every process at the same period P, a call makes one pass where nothing
+    /// is due, then two passes where all the processes run (one per tick): a call lasts about 2 P,
+    /// and every pass carries the pipe intact from the first process to the last.
+    // History (2026-10-13): until then the pipe was declared per pass, `end_instant` was tested
+    // BEFORE each process (a pass could be cut in the middle) and a late process was re-phased on
+    // "now". A ~1 ms hiccup shifted the mixer's due instant behind the others; it then set
+    // `end_instant` itself, the pass was cut right between the attitude stage and the mixer, and the
+    // wrench was lost at every tick until another hiccup reshuffled the phases: the attitude loop
+    // stayed open for up to 1.8 s in Gazebo. Steps 2 to 4 above are the fix.
+    // NOTE: (b) with zero processes the `for` loop never runs and the call returns at once (the
+    // `end_instant` test passes immediately, nothing to sleep for): a caller that loops on an empty
+    // processes pipeline (a side pipeline thread) spins and burns a whole core.
     fn run_once(&mut self) {
         let len = self.processes.len();
         let start_instant= Instant::now();
         let mut end_instant= start_instant;
         //Compute the ending instant of the processes pipeline
         for i in 0..len {
-            let (proc, instant)= &self.processes[i];
+            let (proc, instant, _)= &self.processes[i];
             if let Some(next_instant)= instant.checked_add(proc.get_period()) {
                 end_instant= Instant::max(end_instant, next_instant);
             }
         }
         let mut run_finished= false;
+        // true during the first pass of this call only: a zero-period FIRST process runs in it
+        let mut first_pass= true;
         //loop until all processes have been executed
         while run_finished == false {
             let mut next_instant= end_instant;
-            // the pipe of this pass; reset at every pass (see NOTE (a) above)
+            // the pipe of THIS pass: emptied at the start of every pass, so the first process never
+            // receives what the last process of the previous pass returned
             let mut input_state= None;
+            // did the predecessor (process i - 1) execute in this pass? A zero-period process follows it
+            let mut predecessor_ran= false;
             //check what processes needs to be executed
+            //multiple processes can be executed in a same execution loop
             for i in 0..len {
-                //IF the ending instant of the processes pipeline has been reached
-                let now= Instant::now();
-                let elapsed_time= end_instant.elapsed();
-                if elapsed_time > Duration::from_millis(0) {
-                    let elapsed_ns= elapsed_time.as_nanos();
-                    run_finished= true;
-                    break;
+                // 1. get the instant of the previous process
+                //      None if the is the first in the pipeline
+                let mut previous_instant= None;
+                if i > 0 { 
+                    previous_instant= Some(self.processes[i-1].1);
                 }
-                //ELSE it remain processes to execute
+                //get the process it will check for it's processe's task execution 
+                let (proc, instant, last_start)= &mut self.processes[i];
+                //check if the process is an event process (process with no period)
+                let zero_period= proc.get_period() == Duration::from_millis(0);
+                //check if the processe's task execution is due, needs to be executed
+                let is_due;
+                //IF the event process is inside the pipeline(means it is not the starting process)
+                //it follows its predecessor: it is due only if its predecessor ran in this pass,
+                //whatever its own instant says
+                if zero_period && i > 0 {
+                    is_due= predecessor_ran;
+                }
+                //ELSE IF it's the starting event process (first of the pipeline, period 0): it runs once
+                //per run_once call, in the FIRST pass only. Its own instant cannot decide: it would be
+                //due again in the last pass of the call, then in the first pass of the next call, i.e.
+                //two runs 0.2 ms apart, then nothing for a whole call
+                else if zero_period {
+                    is_due= first_pass;
+                }
+                //ELSE it's a timed process: its own instant decides
                 else {
-                    let (proc, instant)= &mut self.processes[i];
-                    //IF it's time to execute the process
-                    if instant.elapsed() > Duration::from_millis(0) {
-                        // the returned value becomes the input of the next process executed in this pass
-                        // NOTE: `dt` receives the nominal period, not the measured time since the previous execution
-                        input_state= proc.exec(&input_state, proc.get_period());
-                        // debug trace, printed at every execution of every process
-                        println!("{:?} Task executed", proc.get_name());
-                        if let Some(nxt_instant)= instant.checked_add(proc.get_period()) {
-                            //IF process task take too much time
-                            //put next instant as now
-                            if nxt_instant.elapsed() > Duration::from_millis(0) {
-                                let now= Instant::now();
-                                *instant= now;
-                                next_instant= now;
-                            } else {
-                                //update the next instant to execute the process
+                    is_due= instant.elapsed() > Duration::from_millis(0);
+                }
+                //IF it's time to execute the process
+                if is_due {
+                    //measured dt: the time since this process last STARTED its task (its previous
+                    //execution), the nominal period at its first execution. Not `instant.elapsed()`:
+                    //`instant` is the due instant of THIS execution, so that would be how late the
+                    //process starts within its pass (~1.5 ms for the mixer), not the ~10 ms elapsed
+                    let now= Instant::now();
+                    let dt= match last_start {
+                        Some(previous_start) => now.duration_since(*previous_start),
+                        None => proc.get_period(),
+                    };
+                    *last_start= Some(now);
+                    //execute the process task with the measured dt
+                    input_state= proc.exec(&input_state, dt);
+                    //IF it's a timed process
+                    //compute the next task execution
+                    if zero_period == false {
+                        let mut is_future_instant= false;
+                        while is_future_instant == false {
+                            if let Some(nxt_instant)= instant.checked_add(proc.get_period()) {
+                                //IF the next process instant is in the future, means Instant::now() is earlier
+                                if nxt_instant.elapsed() == Duration::from_millis(0) {
+                                    //the next process execution instant is find
+                                    is_future_instant= true;
+                                }
                                 *instant= nxt_instant;
-                                //get the closest next instant for process execution
-                                next_instant= Instant::min(nxt_instant, next_instant);
+                            } else {
+                                // Instant overflow (never in practice): stop instead of looping forever
+                                is_future_instant= true;
                             }
                         }
                     }
-                    //ELSE it's not time for this process, so we will check for the next
-                    else {
-                        //but we check if it's next execution instant is the closest
-                        next_instant= Instant::min(*instant, next_instant);
-                        continue;
+                }
+                //IF it's not the time to execute process task, throw the input state
+                //to not process wrong state for the next process that will execute its task
+                else {
+                    input_state= None;
+                }
+                //IF it's a event process
+                //save the next execution instant
+                if zero_period {
+                    //end_instant only for the first process: first_pass decides when it runs, the
+                    //instant only has to stay in the future so that the sleep below is not cut short
+                    *instant= end_instant;
+                    //previous_process_instant if the current process is inside the pipeline(not the starting process)
+                    if let Some(prev_instant) = previous_instant {
+                        *instant= prev_instant;
                     }
                 }
+                //hand this execution status to the NEXT process of the pass: it becomes its predecessor_ran
+                //(an event process placed right after this one runs only if this one ran in this pass)
+                predecessor_ran= is_due;
+                next_instant= Instant::min(*instant, next_instant);
             }
+            //the next passes of this call are not the first one any more
+            first_pass= false;
+            //IF the ending instant of the processes pipeline has been reached
+            let elapsed_time= end_instant.elapsed();
+            if elapsed_time > Duration::from_millis(0) {
+                run_finished= true;
+                break;
+            }
+            //IF the processes executions loop is finished but the ending process pipeline's instant is not reached
             if run_finished == false {
-                //wait for the remaining time until the very next process execution instant
+                //wait until the very next process execution's instant
                 thread::sleep(next_instant.saturating_duration_since(Instant::now()));
             }
         }
@@ -306,8 +383,8 @@ impl Scheduler {
     /// The pipeline is created on first use; pipeline ids are indices into `side_pipelines`.
     // NOTE: the `frequency_hz` argument described above no longer exists (see `register_process`).
     // NOTE: pipeline ids must be dense: registering on id 2 first creates the empty pipelines 0 and
-    // 1, and `start_all_side_pipelines` spawns a thread for each of them, which spins forever on an
-    // empty pipeline (see `ProcessesPipeline::run_once`, NOTE (b)).
+    // 1, and `start_all_side_pipelines` spawns a thread for each of them, which busy-loops on its
+    // empty pipeline and burns a core (see `ProcessesPipeline::run_once`, NOTE (b)).
     pub fn register_side_process(&mut self, process: Box<dyn Process + Send>, pipeline_id: u8) {
         while self.side_pipelines.len() <= pipeline_id as usize {
             self.side_pipelines.push(ProcessesPipeline::new(pipeline_id));
@@ -385,8 +462,8 @@ impl Scheduler {
     ///
     /// The running flag is only checked between two `run_once` calls, so each join waits for the
     /// current call to complete.
-    // NOTE: an empty side pipeline never returns from `run_once` (see NOTE (b) there), so its join
-    // blocks forever.
+    // NOTE: an empty side pipeline returns from `run_once` at once (see NOTE (b) there): its thread
+    // busy-loops until it is stopped, but the join itself completes.
     pub fn stop_all_side_pipelines(&mut self) {
         for (_, running) in &self.side_pipeline_handles {
             running.store(false, Ordering::Relaxed);

@@ -32,6 +32,26 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 
 ---
 
+### 2026-10-18 — Fix processes time shifting and non expected data drops between processes tasks executions
+
+#### Added
+- `ProcessesPipeline`:
+  + new element in the `processes` tuple. This element is the process last execution instant
+  it allows to measure the right dt for the process `exec(...)`
+  + event process handling(process with period=0). Thoses processes will only run after it's previous process in the pipeline processes list
+  + reset `ìnput_state` passed to processes `exec(...)` for each skipped processes. It ensure the `input_state` passed to a process, is from it's previous process in the pipeline(predecessor). In that case, `None` will be passed to the process `exec(...)`. If the process can't handle `None` messages, storing predecessor state is mandatory to reuse it while new data not available
+  + if the first process of the pipeline is an event process, it will always run its task, at each `run_once(...)` pipeline calls
+
+#### Fixed
+- `ProcessesPipeline`:
+  + creating a `None` `input_state` before each pass and throwing `input_state` after a complete pass(execution of the last due process in the pipeline)
+  + adding period to the next exec instant enough time to ensure the next instant will be in the future, relative to the process period. Instead of computing the next instant time by adding the process period to `Instant::now()`
+  + `end_instant` computed before executing the first processes execution's loop
+
+#### Removed
+- `Task executed` no longer printed
+
+
 ## 2026-06 → 2026-09 — Gazebo Harmonic, scheduler and control cascade
 
 ### Paradigm change: observers → scheduler and processes pipelines
