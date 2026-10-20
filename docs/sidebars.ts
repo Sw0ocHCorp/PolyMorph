@@ -49,7 +49,10 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Simulation',
       collapsed: false,
-      items: [{type: 'doc', id: 'simulation/gazebo', label: 'The Gazebo bridge'}],
+      items: [
+        {type: 'doc', id: 'simulation/gazebo', label: 'The Gazebo bridge'},
+        {type: 'doc', id: 'simulation/running-scenarios', label: 'Running scenarios'},
+      ],
     },
     {type: 'doc', id: 'glossary', label: 'Glossary'},
     {type: 'doc', id: 'contributing', label: 'Extending this documentation'},

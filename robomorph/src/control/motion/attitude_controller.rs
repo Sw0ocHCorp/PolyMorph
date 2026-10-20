@@ -210,7 +210,9 @@ impl MotionController for AttitudeController {
                     // are portable between vehicles.
                     let result_wrench= WorkVec::new_from_vec3(Vec3::from(force_vec), 
                                                                         Vec3::from(self.vehicle_config.moments_matrix * angular_accel));
-                    println!("[AttitudeController:INFO] -> Resulting Vehicle Wrench:\n{:?}", result_wrench);
+                    if verbose {
+                        println!("[AttitudeController:INFO] -> Resulting Vehicle Wrench:\n{:?}", result_wrench);
+                    }
                     return Some(AnyMessage::VehicleWrench(result_wrench));
                 }
             } 
@@ -218,7 +220,10 @@ impl MotionController for AttitudeController {
         // Missing measurement or setpoint: abstain. A zero wrench here would be an active
         // "cut everything" command, executed faithfully by the mixer (it once made the rotors
         // alternate between hover thrust and minimum at the loop rate).
-        println!("[AttitudeController:WARNING] -> Wrong data passed to Attitude controller");
+        // verbose only: at start-up (no pose yet, Gazebo paused) this would print at every pass
+        if verbose {
+            println!("[AttitudeController:WARNING] -> Wrong data passed to Attitude controller");
+        }
         return None;
     }
 

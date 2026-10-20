@@ -8,6 +8,8 @@
 | `ω` | measured angular rate, body frame | rad/s | `Pose.imu_measurement.a_velocity` |
 | `T` | a thruster's current thrust | N | `MotorFeedBack.current_value` (thruster) |
 | `θ_j` | a joint's current angle | rad | `MotorFeedBack.current_value` (joint) |
+| `v` (velocity) | linear velocity of the vehicle, **world** frame | m/s | `Pose.l_velocity` (Gazebo odometry, rotated into the world by the bridge) |
+| `p` (position) | position of the vehicle origin, **world** frame | m | `Pose.relative_location` (Gazebo odometry) |
 | `dt`, `T` (period) | time step / loop period | s | `Process::get_period` |
 
 ## Setpoints
@@ -81,7 +83,7 @@
 | `m_ci` | the same moment moved to the pivot: `M_ci − q × f_ci` |
 | `w_ci` | child `ci`'s work vector |
 | `x_k` | the motor state at cycle `k` — the operating point the columns are linearised about |
-| `k_m` | reaction torque per newton along the thrust axis, signed (`moment_constant`) |
+| `k_m` | reaction torque on the airframe per newton along the thrust axis, signed: negative for a counter-clockwise rotor (`moment_constant`) |
 | `q` (pivot) | a joint's position, about which its subtree rotates |
 | `a_j` | effectiveness column: wrench gained per unit of command (per N or per rad) |
 | `w_j` | work vector: wrench produced right now; `T·a_j` for a thruster, the children's sum for a joint |
@@ -100,9 +102,12 @@
 | process | the unit of scheduling (`Process`): a main task `exec(input, dt) -> output` run at the process's own period |
 | **processes pipeline** | the scheduler's execution unit (`ProcessesPipeline`): an ordered list of processes sharing one thread and one clock, executed in registration order and linked by the pipe. Called `ProcessesChain` before the rename |
 | main pipeline / side pipeline | the processes pipeline run on the caller's thread by `run_main_pipeline()` / one run on a dedicated thread by `start_all_side_pipelines()` |
-| pass | one walk over the processes of a processes pipeline, executing those whose due instant has come |
-| **pipe** | the value a process returns, handed as `input` to the next process of the same processes pipeline **within the same pass**, and lost after it |
+| pass | one walk over the processes of a processes pipeline, executing those that are due. A pass that has started always runs to its end |
+| grid | the due instants of a periodic process, one period apart. A late process skips the ticks it missed and stays on its grid |
+| **pipe** | the value a process returns, handed as `input` to the process registered right after it, **within the same pass**, and lost after it. `None` when that process abstained or was not executed in the pass |
 | **robotics pipeline** | a functional domain of the stack (motor control, perception…) documented under `pipelines/`. It runs on one or more processes pipelines |
+| **simulated time** | the clock of Gazebo's physics, carried by the `header.stamp` of every Gazebo message. The bridge stamps the `Pose` with it; it drifts from the wall clock as soon as Gazebo runs slower or faster than real time |
+| **scenario** | a timeline of setpoints played on the simulated time, with the predictions its report checks (`gazebo_vehicles_controller/src/scenarios/`, see [Running scenarios](./simulation/running-scenarios.mdx)) |
 
 ## Naming traps
 

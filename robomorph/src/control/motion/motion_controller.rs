@@ -54,9 +54,11 @@ pub struct VehicleKinematicConfig {
     pub error_linear_factor: f64,
     pub error_angular_factor: f64,
     pub error_attitude_factor: f64,
-    /// Position of the centre of mass in the vehicle frame (m). Added to every ROOT motor position
-    /// so that all lever arms, hence all moments, are taken about the CoM (the "reduction point").
-    pub com_relative_location: Vec3,        //location of the CoM, relative to the origin of the motor
+    /// Position of the centre of mass in the vehicle frame (m), measured from the vehicle origin -
+    /// the origin the root motor positions are given from. The mixer SUBTRACTS it from every ROOT
+    /// motor position, so that all lever arms, hence all moments, are taken about the CoM (the
+    /// "reduction point").
+    pub com_relative_location: Vec3,
     /// Total vehicle mass `m` (kg) - despite the name it is a mass, not a weight in newtons.
     pub weight: f64,
     /// The INERTIA matrix `I` (kg.m^2): the matrix of moments of INERTIA of the whole vehicle

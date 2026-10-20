@@ -9,7 +9,7 @@ Validating a stage is never a matter of judging that "it looks stable". Because 
 | **A** — unit tests | `q, q_d → e_R → wrench` on reference cases, `#[cfg(test)]` | the mathematics, with no physics | done |
 | **B** — open-loop signs | vehicle tilted, motors disabled, wrench logged on 3 axes | frame conventions (direction of `q`, order of `q_err`, sensor reference) | done |
 | **C** — static equilibrium | closed loop, identity setpoint | holding equilibrium, weight sharing, data flow | done |
-| **D** — step response | setpoint stepped a few degrees, curve `θ(t) = ‖e_R‖(t)` | the dynamics: conformity to the commanded second order | to do |
+| **D** — step response | setpoint stepped by 10° of roll and back: scenario `roll_step`, judged by `report` ([Running scenarios](../../simulation/running-scenarios.mdx)) | the dynamics: conformity to the commanded second order, delay budget included | in progress |
 | **E** — disturbance rejection | external wrench, re-convergence | rejection (already observed incidentally, see below) | to formalise |
 
 ## Numeric criteria
@@ -17,7 +17,7 @@ Validating a stage is never a matter of judging that "it looks stable". Because 
 - **A** — `q = q_d` → zero **and finite** error; 30° roll → `e_R = (0.5236, 0, 0)`; shortest path: a setpoint at 350° → `e_R = (−0.1745, 0, 0)`; the invariant `‖e_R‖ ≤ π` always. Float comparisons with a tolerance, never `==`.
 - **B** — positive roll → negative `mx` (righting), likewise on the other axes; `f_body` leans the right way; `q·(0,0,1)` computed from the sensor quaternion points where the thrust axis physically points; **IMU and odometry agree**.
 - **C** — wrench `[0, 0, m·g, 0, 0, 0]`, rotors steady at `m·g/2` each, arms motionless, attitude held; **slow altitude drift is tolerated** (thrust-model surplus, ~0.1 % of weight).
-- **D** — see the decay milestones below, and no overshoot at `ζ = 1`.
+- **D** — the milestones below, corrected by the [actuation-delay budget](../../math/cascaded-control.mdx#the-actuation-delay-budget): **26.2 / 62.2 / 81.8 %** of the step covered at τ / 2τ / 3τ (± 4 points), overshoot ≤ 3 %. The ideal 26 / 59 / 80 % is what is asked for, not what a chain with one period of delay and rotor lag delivers.
 
 ### What a correct step looks like
 
@@ -40,6 +40,8 @@ A test **on the ground with thrust = weight is ill-posed**: the vehicle is weigh
 
 Taking off from the ground is a case of its own: it is a contact transition that a spool-up sequence should smooth — supervisor work, not attitude-loop work.
 
+**Retained (brick 2): in the air.** `classic_env.sdf` spawns the OSPRAI 20 m above the ground and Gazebo is launched paused, so the controller is ready before the first physics step. The same bench serves the velocity loop later, which the ball joint could not. The cost: the vehicle sinks at about 0.5 m/s, a speed picked up while the rotors spin up and never corrected in stabilize mode (from 2 m it reached the ground after about 4 s, hence 20 m), and it travels sideways during a roll step.
+
 ## Diagnosing a non-conforming step
 
 | Symptom on `θ(t)` | Likely cause | Where to look |
@@ -55,7 +57,7 @@ The stage's own gains are the **last** suspects: since the target is known, the 
 
 ## What to log
 
-To be able to **bisect the chain** (raw inputs → intermediate step → output), everything **on one line per cycle**, emitted from the controller's `exec`:
+To be able to **bisect the chain** (raw inputs → intermediate step → output), everything **on one line per cycle**. The `Recorder` process does it for the scenarios: one CSV row per pass, with the pose, the setpoint and the motor commands ([the recording](../../simulation/running-scenarios.mdx#the-recording)). The full list, for a manual investigation:
 
 1. raw sensor `q`; 2. odometry orientation (ground truth); 3. gyro `ω`; 4. `q_d`; 5. `e_R`; 6. published wrench — plus, in closed loop, the motor commands and the mixer's residual. Twenty cycles are enough for a static test. **Predict the values before running, explain every gap afterwards.**
 
@@ -63,4 +65,4 @@ Flow health counters: fresh messages per tick (expected: exactly 1), abstentions
 
 ## Next
 
-Once D and E pass: wire the odometry, then build the velocity loop — whose first bias to absorb is already measured.
+Once D and E pass, build the velocity loop, whose first bias to absorb is already measured. The odometry it needs is wired since brick 2: `Pose.l_velocity` and `Pose.relative_location`, in the world frame.

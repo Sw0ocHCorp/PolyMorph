@@ -25,10 +25,15 @@ Every entry links an observed symptom to the mechanism that explains it and the 
 | Symptom | Cause | Rule |
 |---|---|---|
 | rotors alternating 5.9 N / 0.1 N at loop rate | on ticks without fresh telemetry (250 Hz controller vs 100 Hz telemetry) the attitude stage published `WorkVec::default()` | missing data is never a zero: return `None`, the consumer holds |
-| 98.6 % null setpoints at the mixer while the attitude stage computed correctly 32 % of the time | the pipe's `input_state` reset to `None` every pass: producer and consumer landed in different passes | the pipe is only reliable within one pass; make its state persistent |
+| 98.6 % null setpoints at the mixer while the attitude stage computed correctly 32 % of the time | the pipe's `input_state` reset to `None` every pass: producer and consumer landed in different passes | fixed in `2681708`: a pass always runs to its end and processes keep their grid, so producer and consumer always share a pass |
 | 30 empty / 30 double ticks out of 454 | beat between two threads at the same nominal frequency | one processes pipeline, one clock; producer registered before consumer |
 | 23 ticks of zero thrust after a single abstention | a zero latched by the mixer's hold while the pipe was broken by a pass overrun (a very verbose mixer) | verbose behind a flag; count late passes |
 | all processes pipelines freezing mid-run | a debugger breakpoint | (not a bug) |
+| motor commands frozen for up to 1.8 s while the vehicle drifted, then flipped; a calm hover looked perfect | the scheduler trap: a ~1 ms hiccup re-phased the mixer on *now*, it then set the call's deadline, and the pass was cut right between the attitude stage and the mixer at every tick, dropping the wrench ([the incident](../../framework/scheduler.mdx#incident-the-open-attitude-loop-2026-10-13)) | grid + complete pass + strict pipe (`2681708`); validate a loop on a **changing** demand (a step), never only in a calm hover |
+| the control thread delayed by the console | sensor callbacks (up to 1 kHz) printed while holding the locks the control thread needs; `println!` blocks when the terminal lags | no high-rate print by default; never print while holding a shared lock |
+| the bench vehicle reached the ground after about 4 s, before the end of the step | the vertical speed picked up while the rotors spin up at Play (~0.5 m/s) is never corrected in stabilize mode | spawn high (20 m), and make the report check the altitude |
+| 12 % of the passes without a new pose, flagged as an invalid run | Gazebo stalls about 20 ms every 130 ms (sensor rendering); the physics does not move meanwhile | judge the control rate in **simulated** time between two updates, not by the ratio of fresh poses |
+| `dt = instant.elapsed()` gave the mixer 1.5 ms instead of 10 ms | `instant` is the due instant of the current execution: its elapsed time is how late the process starts, not the time since its last run | `dt` measured from the last start, stored next to the due instant |
 
 ## Physics and solver (rung C)
 
@@ -41,6 +46,28 @@ Every entry links an observed symptom to the mechanism that explains it and the 
 | lateral travel after a roll disturbance | structural behaviour of stabilize mode: attitude holds attitude, not position; only rotor drag brakes | the velocity loop |
 | two identical mixers fed the same data allocate slightly differently (seen 3 times out of 3 on a closed-loop test, since removed) | motors of equal depth were ordered by `HashMap` iteration, randomised per map: the Gauss-Seidel sweep order, hence the allocation, changed | break ties by motor id; an allocation must be reproducible |
 | a roll-rate kick peaks 8 % higher and 20 % **earlier** than the ideal `ω₀·τ/e` at `τ` (same closed-loop test; the delay model gives 10 % and 20 %) | the actuation-delay budget (one period + rotor lag): the angle grows unopposed for a period, then the rate feedback over-brakes on a stale rate | predict with the delays counted ([the actuation-delay budget](../../math/cascaded-control.mdx#the-actuation-delay-budget)); the ideal `(τ, ζ)` response is what you ask for, not what you get |
+| in free flight the 10° roll hold falls to 4.8° (bug #9 present) | the vehicle slides sideways; the drag on its rotors, above the CoM, pushes the roll back, and the attitude law has no integrator | identify the drag from the accelerometer (`m·a_y = −b·v_y`), predict the held roll, and judge it ([a constant disturbing moment](../../math/cascaded-control.mdx#a-constant-disturbing-moment-leaves-a-steady-error)) |
+| edge fractions off the model by up to 7 points: faster than predicted at τ, slower at 2τ and 3τ | roll → yaw → arms → roll: a rotor changing speed yaws the vehicle, the mixer tilts the arms to hold the yaw, and tilting a spinning rotor gives a gyroscopic roll torque | fit every physical term on the gyro (roll R² 0.81 → 0.999 with the gyroscopic term); judge only what the model covers, and show the rest for information |
+| the rotor time-constant fit only found the spin-up | it kept the intervals where the speed was 2 % away from its command; a 10° step moves the speeds by 0.6 % | least squares over every interval: the small gaps weigh little but count |
+
+## Found by reading the code (brick 2)
+
+Defects that no run had revealed yet, because the quantity was never consumed or the faulty value was zero. Each one would have shown up as soon as the next stage relied on it.
+
+| Defect | Cause | Rule |
+|---|---|---|
+| `Pose.l_velocity` wrong, and documented as body-frame (#1, #2) | the odometry quaternion's x, y, z components were fed to three `from_axis_angle` calls, as if they were Euler angles | a quaternion is used only as a rotation (`UnitQuaternion` from `(w, x, y, z)`, w first); the frame of every vector field is stated in its doc comment |
+| lever arms measured from the wrong point as soon as `p_com ≠ 0` (#11); and `p_com = 0` while the real CoM is 1.7 cm above the origin | the mixer **added** `p_com` to the root motor positions: the vector from the CoM to a motor is `p − p_com` | a hand-predicted test on a non-zero value; vehicle data derived from the SDF, with the derivation written next to it |
+| `l_velocity = Some(0)` and `relative_location = Some(0)` before the first odometry message | constructor defaults | missing data is `None` (P3), never a zero: "at rest at the origin" is a measurement nobody made |
+| the mixer delivered only 62.5 % of the demanded roll moment (#9; measured 0.626 in flight) | the bridge computed a rotor's position relative to its arm on a **copy** (`Vec3` is `Copy`) and dropped it: the rotors stayed at their model-frame position as if relative to the arm, so the mixer placed them at (0, ±0.48, 0.20) instead of (0, ±0.30, 0.10) | a computed value must be written back (`set_motor_relative_location`); each child is placed from a snapshot of the model positions, so the visit order does not matter |
+
+## Found by identification in flight (brick 2)
+
+Defects that no check had caught, revealed by fitting the physics on a flight recording ([identifying the vehicle](../../simulation/running-scenarios.mdx#identifying-the-vehicle-in-flight)).
+
+| Defect | Cause | Rule |
+|---|---|---|
+| a steady yaw error of 0.15° while a roll is held (#12; body frame, the error the law corrects) | the bridge gave the left rotor, which spins counter-clockwise, `k_m = +0.016`: the sign of the right one. The mixer expected the yaw torque of a differential thrust the wrong way round, and its compensation by the arms added to it. The fit found `k_m = 0.0158` with the opposite sign, and the SDF's `turningDirection` agreed. Fixed: −0.015° on run 3 | a vehicle description is checked against a flight: fit every term with its sign; `moment_constant` is the moment on the **airframe** (negative for a ccw rotor) |
 
 ## Communications
 
@@ -52,6 +79,7 @@ Every entry links an observed symptom to the mechanism that explains it and the 
 
 - **Predict before running, explain every gap afterwards.** Every bug above was found by comparing against a value computed in advance, never by watching behaviour.
 - **Bisect**: log raw inputs, the intermediate step and the output on one line.
+- **Measure an error in the frame the law uses.** Rolled by 6.4°, a pitch error of 0.27° leaks into the Euler yaw: the heading said 0.06° of yaw error where the law, which works in the body frame, saw 0.015°. A prediction about a controller is checked on the quantity that controller corrects.
 - **One symbol, one shape**: when a formula references a config field, state its type (scalar, vector, matrix), the exact operation, and flag a misleading name (`moments_matrix` holds moments of *inertia*).
 
 ## Flagged in the code, not fixed
@@ -60,7 +88,7 @@ Annotating the code surfaced fragilities that have not (yet) shown up at run tim
 
 | File | Point |
 |---|---|
-| `core/scheduler.rs` | pipe reset every pass; an empty processes pipeline spins forever; a late process's deadline reset to *now* (phase scrambling); `dt` = nominal period, not elapsed time; non-contiguous side-pipeline ids create empty spinning pipelines |
+| `core/scheduler.rs` | an empty processes pipeline returns at once, so a thread looping on it spins; `dt` is wall-clock time while Gazebo's physics runs on simulated time; non-contiguous side-pipeline ids create empty spinning pipelines |
 | `messages/registered_message.rs` | `from_frame` panics on an empty frame and never checks the tag byte; `MotorModel` and `RemoteControl` encode but are never decoded |
 | `messages/motor_messages.rs` | `WorkingAxis::Unknown` (0) falls into the "joint" family through the mixer's ordering tests |
 | `communications/udp_interface.rs` | TX thread dies on `Lagged`; internal-only variants encode to an **empty** frame, which is also the RX thread's poison pill; RX and TX on the same channel echo received frames; `buffer_capacity` unused |
@@ -68,4 +96,3 @@ Annotating the code surfaced fragilities that have not (yet) shown up at run tim
 | `control/pid_controller.rs` | the accumulator integrates even with `i = 0`; `dt = 0` divides by zero; the derivative after a `reset` is taken against 0 |
 | `control/motion/motors_mixer.rs` | convergence criterion on the total residual norm (replace with `‖Aᵀr‖`) |
 | `control/motion/attitude_controller.rs` | the division by `‖v‖` is evaluated before the guard (harmless *only* because the guard tests `‖v‖`, not the result) |
-| `vehicle_controllers/osprai_controller.rs` | a rotor's position is never re-expressed in its arm's frame (the subtraction acts on a copy): the mixer places the rotors at (0, ±0.48, 0.20) instead of (0, ±0.30, 0.10), so only ~62 % of the demanded roll moment is produced. Fix planned in brick 2 |

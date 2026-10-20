@@ -45,7 +45,7 @@ From the control point of view, equal frequencies are healthy: the cascade's tim
 
 | Mechanism | Guarantee | Used for |
 |---|---|---|
-| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass of the same processes pipeline | attitude → mixer |
+| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass, from a process to the one registered right after it (`None` if that one did not run) | attitude → mixer |
 | **broadcast channel** (tokio) | asynchronous, non-blocking, bounded capacity, `Lagged` when a receiver falls behind | telemetry, motor feedback, commands |
 
 A `Lagged` error means *"messages were skipped, carry on"*. Treating it as a termination condition kills the consumer silently.
@@ -66,4 +66,8 @@ A `Lagged` error means *"messages were skipped, carry on"*. Treating it as a ter
 
 ## Period budget
 
-Execution times add up inside the period (10 ms at 100 Hz). A `println!` is a blocking call; a very verbose stage can overrun a pass, and an overrun shifts process phases and breaks the pipe. Verbose output stays behind a flag, and a counter of late passes is the right health indicator.
+Execution times add up inside the period (10 ms at 100 Hz). A `println!` is a **blocking** call: when the terminal cannot keep up, it waits, and so does every thread that needs a lock held by the printing thread. That is how console output once opened the attitude loop (see [the incident](scheduler.mdx#incident-the-open-attitude-loop-2026-10-13)). Since the scheduler keeps its grid and never cuts a pass, an overrun no longer breaks the pipe, but it still delays the loop. Three rules follow:
+
+- **no per-pass or high-rate print by default**: `verbose` flags are off, and the per-pass prints of the stages sit behind them;
+- **never print while holding a lock shared with the control thread**: copy what is to be printed, release the lock, then print;
+- **rare anomaly warnings are fine** (an out-of-bounds value, a solver that does not converge), as long as they stay rare.

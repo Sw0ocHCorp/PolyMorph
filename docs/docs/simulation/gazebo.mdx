@@ -10,7 +10,7 @@ File: `gazebo_simulation/gazebo_vehicles_controller/src/vehicle_controllers/ospr
 | `osprai/gps` | in | NavSat → `GNSSMeasurement` |
 | `osprai/lidar` | in | LaserScan → `LidarMeasurements` |
 | `osprai/cameras/{left,right}` | in | stereo images |
-| `/model/osprai/odometry` | in | ground-truth pose (printed in verbose mode: the **judge** of every convention test) |
+| `/model/osprai/odometry` | in | ground-truth pose, 250 Hz: position and linear velocity, both in the **world** frame (`Pose.relative_location`, `Pose.l_velocity`); also the **judge** of every convention test |
 | `/osprai/joint_state` | in | joint positions / velocities → motor feedbacks |
 | `/osprai/command/motor_setpoints` | out | `Actuators`: rotor speeds (rad/s) and arm positions (rad) |
 | `/world/my_environment/scene/info` | request | discovery of the model's links |
@@ -19,7 +19,9 @@ File: `gazebo_simulation/gazebo_vehicles_controller/src/vehicle_controllers/ospr
 
 ## Building the motor tree
 
-On connection the scene is queried: every `arm_*` link becomes a joint (`RotatingAroundY`, limits ±1.57 rad, speed 10 rad/s), every `rotor_*` link a thruster (`LinearMotionAlongZ`, `k = 1.2e-5`, `n = 2`, `k_m = ±0.016` signed by side). Ids are derived from the link name (byte sum). On the first `joint_state` message, parenthood is established (`tilt_*` → `arm_*`, `spin_*` → `rotor_*`), relative positions are recomputed in the parent's frame, rotor bounds are set (`min 0.1 N`, max = `k · 1200²`), and the `MotorController`s are pushed to the mixer on the configuration channel.
+On connection the scene is queried: every `arm_*` link becomes a joint (`RotatingAroundY`, limits ±1.57 rad, speed 10 rad/s), every `rotor_*` link a thruster (`LinearMotionAlongZ`, `k = 1.2e-5`, `n = 2`, `k_m` = −0.016 for the left rotor, which spins counter-clockwise, and +0.016 for the right one: the reaction moment on the airframe, see bug #12 in the [lessons](../pipelines/motor-control/lessons.mdx#found-by-identification-in-flight-brick-2)). Ids are derived from the link name (byte sum). On the first `joint_state` message, parenthood is established (`tilt_*` → `arm_*`, `spin_*` → `rotor_*`), relative positions are recomputed in the parent's frame, rotor bounds are set (`min 0.1 N`, max = `k · 1200²`), and the `MotorController`s are pushed to the mixer on the configuration channel.
+
+The scene gives every link's position in the **model** frame, while a `MotorModel` expects it in its **parent's** frame. The bridge first takes a snapshot of all the model-frame positions, then writes `p_child − p_parent` into each child. This plain subtraction is valid because the OSPRAI's links rest with an identity orientation; a parent with a rotated rest pose would also need its inverse rotation. Until bug #9 this result was computed on a copy and thrown away: the mixer placed the rotors at `y = ±0.48 m` instead of `±0.30 m`, and delivered only 62.5 % of every roll moment (see [Running scenarios](./running-scenarios.mdx#the-red-run-bug-9)).
 
 ## Feedbacks: the effort law at the boundary
 
@@ -31,15 +33,32 @@ On every `exec`, the mixer's `MotorCommand`s are converted into the actuator's u
 
 > **Absolute rule: never send a non-finite command to Gazebo.** The `MulticopterMotorModel` keeps a `NaN` in its first-order filter for the rest of the run — the rotor never spins again and the whole chain reads zero thrust. The same holds for real hardware: an ESC fed garbage does not recover on its own.
 
-## Telemetry and setpoint
+## Telemetry
 
-`exec` publishes the latest known pose on the telemetry channel (updated by the IMU callback at 250 Hz, hence less than 4 ms old) and a fixed attitude setpoint (identity) on the setpoint channel. Only the orientation of that setpoint is read by the attitude controller.
+`exec` publishes the latest known pose on the telemetry channel. Two callbacks fill it, both at 250 Hz, so the pose is less than 4 ms old:
+
+| Field | Source | Frame |
+|---|---|---|
+| `orientation` (`q`), `imu_measurement` (gyro `ω`, accelerometer) | IMU | `q` body→world; `ω` body |
+| `l_velocity` (`v`) | odometry: `twist.linear` is in the **body** frame, so it is rotated by the odometry's own quaternion, `v = q_odom · twist.linear` | **world** |
+| `relative_location` (`p`) | odometry: position of the model origin | **world** |
+| `timestamp` | the `header.stamp` of the latest IMU or odometry sample: the **simulated time** | — |
+
+Until bug #1 the odometry quaternion's x, y, z components were used as three Euler angles, which is not a rotation of the vehicle at all.
+
+Before the first sample, `timestamp`, `l_velocity` and `relative_location` are `None` (P3), never a zero: a consumer abstains rather than reading a fake "at rest at the origin". The lidar, the cameras and the motor feedbacks are still stamped with the wall clock, because nothing reads those stamps yet.
+
+The bridge **no longer publishes a setpoint**: it only measures and actuates. The mission setpoint comes from the scenario player, the single source of setpoints (see [Running scenarios](./running-scenarios.mdx)).
 
 ## The SDF model
 
-- total mass 1.2 kg (base 1.0 + two arms + two rotors at 0.05 kg); the controller config carries the **total** inertia (0.017 / 0.0239 / 0.0357 kg·m²), consistent with the parallel-axis theorem applied to the offset masses;
+- total mass 1.2 kg (base 1.0 + two arms + two rotors at 0.05 kg). The controller config carries the **total** inertia (0.017 / 0.0239 / 0.0357 kg·m²), taken about the centre of mass with the parallel-axis theorem;
+- centre of mass `z = (4 × 0.05 × 0.10) / 1.2 = 1/60 m ≈ 0.0167 m` above the model origin (`com_relative_location` in `main.rs`). The mixer subtracts it from the root motor positions, so that every lever arm is measured from the CoM;
+- **tilt 0 = thrust up**: the arm and rotor links rest with an identity orientation, so `+π/2` points the thrust along +X (forward) and `−π/2` along −X (backward);
+- odometry at 250 Hz (`<odom_publish_frequency>`; the default is 50 Hz, which would hold a sample for two passes);
+- the world (`classic_env.sdf`) spawns the OSPRAI 20 m above the ground and is launched paused (see [Running scenarios](./running-scenarios.mdx#procedure)): in stabilize mode, the sink picked up while the rotors spin up is never corrected;
 - rotors at `y = ±0.30 m`, `z = 0.10 m`; arms at `y = ±0.18 m`;
-- `MulticopterMotorModel` plugin: `motorConstant 1.2e-5`, `momentConstant 0.016`, `timeConstantUp 0.0125 s`, `timeConstantDown 0.025 s`, `maxRotVelocity 1200 rad/s`, rotor drag `8.06e-5` (this is what slowly brakes a residual lateral velocity);
+- `MulticopterMotorModel` plugin: `motorConstant 1.2e-5`, `momentConstant 0.016`, `turningDirection` ccw (left) and cw (right), `timeConstantUp 0.0125 s`, `timeConstantDown 0.025 s`, `maxRotVelocity 1200 rad/s`, rotor drag `8.06e-5` (this is what slowly brakes a residual lateral velocity);
 - IMU at 250 Hz with:
 
 ```xml

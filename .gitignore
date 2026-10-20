@@ -23,3 +23,5 @@ robomorph/Logs/
 .claude/
 
 *.txt
+
+gazebo_simulation/gazebo_vehicles_controller/runs/

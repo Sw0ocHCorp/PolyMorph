@@ -14,9 +14,9 @@ A `Process` is the unit of scheduling. Its core method is:
 fn exec(&mut self, input: &Option<AnyMessage>, dt: Duration) -> Option<AnyMessage>;
 ```
 
-- `input` is the **pipe**: the value returned by the previous process of the same processes pipeline, in the same pass.
+- `input` is the **pipe**: the value returned by the process registered **right before** this one, in the same pass. It is `None` when that process abstained or was not executed in this pass.
 - The returned value becomes the `input` of the next process. `Some(...)` hands something over; `None` means *nothing to hand over* — an explicit abstention.
-- `dt` currently receives the process's nominal **period**, not the measured elapsed time.
+- `dt` is the **measured** time since this process last started its task: about one period in steady state, more after a skipped tick. At the first execution it is the nominal period.
 
 The remaining methods (`set_receiver`, `set_sender`, `set_period_from_freq`, `get_period`, `set_name`, `get_name`) are wiring.
 
@@ -29,20 +29,76 @@ The remaining methods (`set_receiver`, `set_sender`, `set_period_from_freq`, `ge
 
 ## `ProcessesPipeline`
 
-A processes pipeline is an ordered list of `(process, next due instant)`. `run_once`:
+A processes pipeline is an ordered list of `(process, next due instant, last start)`. `run_once`:
 
-1. computes `end_instant`, the latest of the `instant + period` deadlines;
-2. loops until `end_instant` is passed: on each pass it walks the processes **in registration order**, executes those whose deadline has come (propagating the pipe), advances their deadline by one period, then sleeps until the nearest deadline.
+1. computes `end_instant`, the latest of the `due instant + period` deadlines;
+2. makes **passes** over the processes, in registration order, and sleeps between two passes until the nearest due instant;
+3. in a pass, executes each process that is due. The pipe goes from a process to the next one only: it is emptied at the start of every pass and whenever a process is skipped;
+4. after an execution, advances the process's due instant by **whole periods** until it is in the future: this is its **grid**. A late process skips the ticks it missed and keeps its phase;
+5. tests `end_instant` **after the pass**, never between two processes: a pass that has started always runs to its end.
 
-If a process is late (its next deadline is already in the past after it ran), its deadline is **reset to now**.
+A process whose period is **zero** has no grid. It follows its predecessor: it runs in every pass where the process before it ran. A zero-period **first** process runs once per `run_once` call, in its first pass.
 
-### Three properties to know
+In steady state, with every process at the same period, a call makes one pass where nothing is due, then two passes where all the processes run, one per tick.
 
-> **1. `input_state` is local to one iteration of the wait loop.** It is reset to `None` on every iteration and every call to `run_once`. The pipe is therefore only reliable when producer and consumer run **in the same pass**: same processes pipeline, same period, registered in order. Making the pipe state a field of `ProcessesPipeline` would make it reliable in every case.
+### What the pipeline guarantees
 
-> **2. Resetting a late process's deadline to *now* shifts its phase** relative to the others. If a pass overruns its period (a very verbose mixer, for example), deadlines can reorder and the pipe breaks. Hence the rule: verbose output behind a flag, and watch for overruns.
+1. **A producer and the consumer registered right after it share every pass.** The pass is never cut between them (step 5), and they stay on the same grid (step 4). The pipe between them is therefore reliable by construction, whatever the execution times.
+2. **A process only receives what its immediate predecessor produced in that pass.** If the predecessor did not run, the input is `None`: the pipe never jumps over a process. A consumer that needs a value at every pass keeps the last one itself, as the mixer keeps its last wrench.
+3. **`dt` is the real elapsed time.** The mixer bounds each arm's motion per cycle with `max_rot_speed × dt`. This is **wall-clock** time: under Gazebo, physics runs on simulated time, and the two drift apart when Gazebo is slower than real time. An integrator has to take this into account (velocity loop, brick 5).
+4. **An empty processes pipeline returns at once**, with nothing to sleep for: a thread that loops on it spins and burns a whole core. Never start a processes pipeline with no process in it.
 
-> **3. An empty processes pipeline spins forever**: `run_finished` is only set inside the `for` loop over the processes. Never start a processes pipeline with no process in it.
+## Incident: the open attitude loop (2026-10-13)
+
+### What was seen
+
+On the first Gazebo run of the scenario bench (`roll_step`), the motor commands **stayed frozen to the sixth decimal for 1.8 s** while the vehicle slowly drifted: 1.5° of roll, 7° of yaw. With the loop open, the vehicle ended up flipping over.
+
+A second run, with the console output piped away, held a perfect hover (0.145° of tilt) but **ignored the 10° step for 0.34 s**. The commanded roll moment followed the attitude law in **0 %** of the passes just after the step, then 29 %, then 0 % again, against 100 % in hover.
+
+### Why the hover looked healthy
+
+In a calm hover, the demanded wrench barely changes from one pass to the next: re-applying an old wrench is almost right, and a freeze is invisible. A freeze only shows when the demand changes, on a step or a disturbance. Rung C of the [validation](../pipelines/motor-control/validation.mdx) only tested a calm hover.
+
+### How it was found
+
+The search went by elimination along the chain:
+- **sensors → bridge**: the recorder reads the same pose stream as the attitude stage, and the roll did change;
+- **attitude law + mixer**: replayed offline with the bridge's exact geometry, they commanded the right moment;
+- **what was left was the transport**, i.e. the pipe from the attitude stage to the mixer. A replica of `run_once` with dummy processes then reproduced the loss, but only once execution-time jitter was added.
+
+### The trap
+
+Three defects of the former `run_once`, each harmless alone:
+
+1. the pipe was a variable recreated **empty at every pass**;
+2. `end_instant` was tested **before each process**, so a pass could be cut in the middle;
+3. a late process had its due instant **reset to now**, with no memory of the grid.
+
+Together they formed a stable trap:
+
+1. A ~1 ms hiccup made the mixer — the longest process — finish late once.
+2. Defect 3 moved its due instant ~1.4 ms behind the others, **for good**: afterwards it advanced by one period at a time, like every other process, and nothing ever pulled it back.
+3. Being the latest due instant, it now set `end_instant` itself.
+4. At every tick, the walk reached the mixer just after its own due instant, that is, just after the deadline: defect 2 cut the pass right after the attitude stage, and defect 1 dropped the wrench with the pipe.
+5. In the next call, the mixer ran alone with an empty input and re-applied its old wrench.
+6. The phases no longer moving, the same cut happened at every tick until another hiccup reshuffled them: freezes from a fraction of a second up to 1.8 s.
+
+The hiccups came from the **console**. The bridge's sensor callbacks printed thousands of lines per second (`joint_state` up to 1 kHz), some of them while holding the locks the control thread needs. A `println!` blocks when the terminal cannot keep up, and the control thread then waited for those locks.
+
+### The fix (`2681708`)
+
+Steps 4 and 5 of the algorithm above: the grid removes the lasting phase shift, and the complete pass removes the cut. The strict pipe (step 3) and the measured `dt` came with the same commit. Since then, the bridge prints nothing by default, and never while holding a lock it shares with the control thread (see [Conventions](conventions.mdx#period-budget)).
+
+| Wrench received by the mixer | Moderate jitter | Heavy jitter |
+|---|---|---|
+| replica of the former `run_once` | 94.5 % | 57.9 % |
+| replica, grid only | 99.9 % | 93.9 % |
+| replica, grid + complete pass | 100 % | 100 % |
+| **real scheduler, before the fix** | **91.3 %** | **24.0 %** |
+| **real scheduler, after the fix** | **100 %** | **100 %** |
+
+In Gazebo after the fix, the commanded roll moment followed the attitude law in **100 %** of the passes, including during the step.
 
 ## `Scheduler`
 

@@ -62,7 +62,7 @@ The **same** struct is used as the attitude controller's **setpoint**, where onl
 | `working_axis` | the motor's **family** — see below |
 | `min_value`, `max_value` | bounds of the motor's own effort: rad for a joint, N for a thruster |
 | `effort_constant` `k`, `exp_command_law` `n`, `transmission_factor` | effort law `T = transmission · k · ωⁿ` (propeller: n = 2) |
-| `moment_constant` `k_m` | reaction torque per newton, along the thrust axis, **signed** by the spin direction |
+| `moment_constant` `k_m` | reaction torque on the airframe per newton, along the thrust axis, **signed** by the spin direction: negative for a rotor spinning counter-clockwise about that axis, positive for a clockwise one |
 | `max_rot_speed` | rotor speed ceiling for a thruster; for a joint, the angular speed used as the allocation's **trust region** per cycle |
 
 ### The two families

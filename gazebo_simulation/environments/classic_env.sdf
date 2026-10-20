@@ -1,13 +1,17 @@
 <?xml version="1.0" ?>
 <!--
-  my_environment.sdf : a custom Gazebo world for the custom_uav drone.
+  classic_env.sdf : the Gazebo world of the OSPRAI test bench (world name
+  "my_environment", used by the controller's topics).
 
-  Run with:
-    export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/absolute/path/to/uav_sim/models
-    gz sim -v 4 -r /absolute/path/to/uav_sim/worlds/my_environment.sdf
+  Run from the repository root, WITHOUT -r so the world starts paused:
+    export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:$(pwd)/gazebo_simulation/vehicles
+    gz sim -v 4 gazebo_simulation/environments/classic_env.sdf
 
-  Then publish motor speeds on /custom_uav/command/motor_speed
-  (gz.msgs.Actuators) to make it fly. See README.md for the exact command.
+  Then start the controller and press Play. The OSPRAI spawns 20 m above the
+  ground: in stabilize mode thrust equals weight, so it can neither take off by
+  itself nor stop the sink it picks up while its rotors spin up at Play
+  (~0.5 m/s, never corrected without a vertical loop). 20 m leaves more than
+  30 s of flight. See docs/docs/simulation/running-scenarios.mdx.
 -->
 <sdf version="1.9">
   <world name="my_environment">
@@ -162,11 +166,15 @@
     </model>
 
     <!-- ============ SPAWN THE DRONE ============ -->
-    <!-- Found via GZ_SIM_RESOURCE_PATH (the models/ folder). Starts on the pad. -->
+    <!-- Found via GZ_SIM_RESOURCE_PATH (the vehicles/ folder). Spawned IN THE AIR, 20 m up:
+         the test bench flies free, without touching the ground (a test on the ground with
+         thrust = weight is ill-posed, see validation.mdx). It sinks at ~0.5 m/s from Play on
+         (the speed picked up while the rotors spin up is never corrected in stabilize mode):
+         2 m only lasted ~4 s, 20 m lasts more than 30 s. -->
     <include>
       <uri>model://osprai</uri>
       <name>osprai</name>
-      <pose>0 0 0.1 0 0 0</pose>
+      <pose>0 0 20.0 0 0 0</pose>
     </include>
 
   </world>

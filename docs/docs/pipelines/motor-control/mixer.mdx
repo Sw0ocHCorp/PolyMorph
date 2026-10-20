@@ -64,6 +64,20 @@ The current criterion stops the sweeps when the **relative** improvement of `‖
 
 > The clean fix: the least-squares optimality condition is **`Aᵀ·r = 0`**, not `r = 0`, and the unreachable part lies in the null space of `Aᵀ`. Judging convergence on `‖Aᵀr‖` — the `motor_scores` vector, already computed at every sub-step — removes the unreachable part from the criterion automatically.
 
+## 7. What the mixer does not model yet: the rotors' gyroscopic torque
+
+A spinning rotor carries an angular momentum along its axis, `H = J·ω`. The airframe receives `−dH/dt` whenever that momentum changes, which happens in two ways:
+- **the rotor changes speed**: a reaction torque about its own axis. On a multirotor, this is a yaw torque at every change of differential thrust;
+- **a joint tilts the rotor**: a precession torque about the third axis, `−J·ω·(δ̇ a × d)`, with `a` the joint axis and `d` the rotor axis. A rotor tilted about y gives a torque about x.
+
+The columns of the effectiveness matrix only hold static effects (force direction, lever arm, `moment_constant`), so the mixer sees neither of them. On the OSPRAI they couple the axes: a roll step yaws the vehicle; the mixer holds the yaw by tilting the arms; and tilting the rotors rolls the vehicle. The yaw kick of a roll step, 7.4°/s on the bench, is almost all reaction torque: over the first 50 ms it is 98 % of the yaw impulse, against 2 % for `moment_constant`. This coupling was identified in free flight: the coefficient `c = J/√k` is the same on the roll and the yaw axis, and with it the roll fit reaches R² = 0.999 instead of 0.81 ([identifying the vehicle](../../simulation/running-scenarios.mdx#identifying-the-vehicle-in-flight)).
+
+Two more effects of the same family were measured on the bench:
+- **The arm servos yield under the gyroscopic load.** When the airframe rolls, each rotor's angular momentum loads its tilt joint, and a servo is not infinitely stiff. The arms leave their commands by `k · spin · √T · ω_roll`, with `k ≈ −0.0049` on both arms (about 3 mrad at 15°/s, as much as the commanded tilts). The mixer believes the commanded angles, so the airframe receives a yaw moment it did not ask for: about 1 mN·m during a roll hold.
+- **A better yaw feedforward changes the roll.** Once `moment_constant` had the right sign (#12), the mixer tilted the arms at once, at the edge of a roll step, to cancel the rotor drag torque it now expected. Tilting the spinning rotors gave a roll torque: in the first 60 ms the roll rate doubled (3.5 → 7.2°/s), the law's damping term lowered the roll demand (63.5 → 51.9 mN·m), the differential thrust grew less, and the yaw kick fell by 19 %.
+
+Planned compensation, **generic**: computed on the motor tree for every joint that carries a spinning rotor, from a rotor property of `MotorModel` (angular momentum per √effort). Nothing will be specific to the OSPRAI.
+
 ## The full cycle (`compute_command_law`)
 
 1. Sort motors by depth in the tree, **ties broken by motor id**. Without the tie-break, motors of equal depth would follow the iteration order of a `HashMap`, which is randomised per map: two identical mixers fed the same data would sweep their motors in different orders and allocate slightly differently.

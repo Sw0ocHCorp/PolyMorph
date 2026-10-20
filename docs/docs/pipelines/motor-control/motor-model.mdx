@@ -21,7 +21,7 @@ Each motor is described **at rest, in its parent's frame** (`relative_location`,
 ```
 orientation :  R_j = R_parent · R_j^rel · Rot(e_j, θ_j)
 position    :  p_j = p_parent + R_parent · p_j^rel
-root        :  R_j = R_j^rel · Rot(e_j, θ_j)        p_j = p_j^rel + p_com
+root        :  R_j = R_j^rel · Rot(e_j, θ_j)        p_j = p_j^rel − p_com
 ```
 
 Two things that are easy to get wrong:
@@ -29,7 +29,7 @@ Two things that are easy to get wrong:
 - a joint's angle `θ_j` is composed **on the right** of `R_j^rel`, because it is a rotation about the joint's *own* axis, expressed in its own frame;
 - `p_j^rel` is expressed in the **parent's** frame: it is rotated by `R_parent`, never by `R_j`.
 
-`Rot(e_j, θ_j)` leaves `e_j` unchanged, so a joint's axis seen from the body does not depend on its own angle. The `p_com` offset on root motors is what makes every lever arm measured from the centre of mass.
+`Rot(e_j, θ_j)` leaves `e_j` unchanged, so a joint's axis seen from the body does not depend on its own angle. Subtracting `p_com` from the root motors is what makes every lever arm measured from the centre of mass: `p_j^rel` and `p_com` are both measured from the vehicle origin, so their difference is the vector from the CoM to the motor. (The code added it until bug #11, harmless only while `p_com` was zero.)
 
 ## Step 2 — effectiveness column and work vector
 

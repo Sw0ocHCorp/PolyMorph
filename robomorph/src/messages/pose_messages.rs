@@ -4,7 +4,9 @@
 //!
 //! Frames: "body" is the frame attached to the vehicle; "world" is the inertial frame the attitude
 //! quaternion is expressed against, z up (the attitude controller compensates the weight along
-//! +z world).
+//! +z world). Rule [P7] of `docs/docs/framework/paradigm.mdx`: translation quantities (position,
+//! linear velocity, forces of the outer loops) live in the WORLD frame; moments and angular rates
+//! live in the BODY frame.
 
 use faer::col;
 use nalgebra::Vector3;
@@ -90,14 +92,16 @@ pub struct Transform {
 /// while `orientation` and `imu_measurement.a_velocity` are read from the current state.
 #[derive(Clone, PartialEq, Message)]
 pub struct Pose {
-    /// Time of the state.
+    /// Time of the most recent sample written into this state. In the Gazebo bridge it is the
+    /// SIMULATED time (the `header.stamp` of the IMU / odometry message), the clock the scenarios are
+    /// played on; `None` until the first sample arrives [P3].
     #[prost(message, optional, tag = "1")]
     pub timestamp: Option<Timestamp>,
     /// Latest GNSS sample.
     #[prost(message, optional, tag = "2")]
     pub gnss_measurement: Option<GNSSMeasurement>,
-    /// Position of the vehicle (m) relative to a local reference origin. Left at zero by the Gazebo
-    /// controller today.
+    /// Position of the vehicle origin (m) in the WORLD frame, relative to a local reference origin.
+    /// The Gazebo bridge fills it from the odometry (ground truth); `None` until a source provides it.
     #[prost(message, optional, tag = "3")]
     pub relative_location: Option<Vec3>,
     /// Attitude quaternion BODY -> WORLD: applied to a body vector it yields world coordinates; its
@@ -108,8 +112,10 @@ pub struct Pose {
     /// Latest IMU sample (body frame); `a_velocity` is the gyro used by the attitude loop.
     #[prost(message, optional, tag = "5")]
     pub imu_measurement: Option<IMUMeasurements>,
-    /// Estimated linear velocity in the body frame. Not a raw measurement: derived by the state
-    /// estimator (or provided directly by the simulator). `None` when no estimate is available.
+    /// Linear velocity (m/s) in the WORLD frame [P7] - the frame the velocity loop works in. Not a
+    /// raw measurement: provided by the simulator today (Gazebo odometry, whose twist is in the
+    /// body frame and is rotated into the world by the bridge), by a state estimator tomorrow; the
+    /// consumers do not change. `None` when no source is available [P3].
     #[prost(message, optional, tag = "6")]
     pub l_velocity: Option<Vec3>,
 }

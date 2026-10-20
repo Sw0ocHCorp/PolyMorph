@@ -43,9 +43,9 @@ There is no vehicle flag and no per-family subclass. What a vehicle can do is *d
 
 ### P4 — One processes pipeline, one clock
 
-**Rule.** A producer and its consumer live in the **same processes pipeline**, the producer registered first. The pipe only exists within one pass.
+**Rule.** A producer and its consumer live in the **same processes pipeline**, the producer registered right before the consumer. A pass always runs to its end and every process keeps its grid, so the two share every pass: the pipe carries the producer's value to its immediate successor, within that pass.
 
-A pass that overruns its period scrambles the order, so per-cycle printing stays behind a `verbose` flag.
+Per-pass printing still stays behind a `verbose` flag: it eats the period budget and adds jitter.
 
 **Why.** Two pipelines at the same nominal frequency on two threads drift in phase, and the consumer sees empty and doubled ticks (a beat).
 

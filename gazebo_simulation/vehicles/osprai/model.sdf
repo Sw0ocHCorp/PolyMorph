@@ -3,12 +3,14 @@
   osprai: an Osprey-style tiltrotor BICOPTER for Gazebo Harmonic / Garden.
 
   Two arms on the lateral (+/-Y) axis, each carrying one rotor. Each arm tilts
-  about the spanwise (Y) axis via a JointPositionController. NOTE the arm and
-  rotor links have a +pi/2 rest pose about Y, so the tilt angle that points
-  thrust UP is -pi/2, NOT 0:
-       tilt = -pi/2  -> rotor thrust points up   (hover)
-       tilt = 0      -> rotor thrust points fwd  (cruise)
-       tilt = +pi/2  -> rotor thrust points down
+  about the spanwise (Y) axis via a JointPositionController. The arm and rotor
+  links rest with an IDENTITY orientation (every pose below has a zero
+  rotation), so tilt 0 points the thrust UP:
+       tilt = 0      -> rotor thrust points up        (hover)
+       tilt = +pi/2  -> rotor thrust points along +X  (forward: a rotation of
+                        +pi/2 about +Y takes +Z to +X)
+       tilt = -pi/2  -> rotor thrust points along -X  (backward)
+  The joint limits are +/-1.57 rad: the thrust never points down.
   Rotors counter-rotate (left CCW, right CW) so reaction torques cancel in hover.
   Each rotor's thrust is produced by a MulticopterMotorModel, and because the
   rotor link is a child of the tilting arm, its thrust vector tilts with the arm.
@@ -19,7 +21,8 @@
       position[0]=left arm tilt,    position[1]=right arm tilt    (rad)
   Outputs:
     /osprai/imu                  gz.msgs.IMU
-    /model/osprai/odometry       gz.msgs.Odometry
+    /model/osprai/odometry       gz.msgs.Odometry, 250 Hz (ground truth; its
+                                 twist is in the BODY frame)
 -->
 <sdf version="1.9">
   <model name="osprai">
@@ -432,6 +435,9 @@
 
     <plugin filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
+      <!-- 250 Hz like the IMU, above the 100 Hz of the control pipeline: every pass gets a fresh
+           velocity (the default, 50 Hz, would hold the same sample for two passes) -->
+      <odom_publish_frequency>250</odom_publish_frequency>
       <odom_frame>world</odom_frame>
       <robot_base_frame>osprai</robot_base_frame>
       <dimensions>3</dimensions>

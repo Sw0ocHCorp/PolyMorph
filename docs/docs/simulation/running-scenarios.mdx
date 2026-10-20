@@ -1,0 +1,233 @@
+# Running scenarios
+
+The Gazebo test bench measures the stack against values **predicted before the run** (rule P10 of the [paradigm](../framework/paradigm.mdx)). Three pieces, in `gazebo_simulation/gazebo_vehicles_controller/src/scenarios/`:
+
+| Piece | Role |
+|---|---|
+| `ScenarioPlayer` (`player.rs`) | plays a **scenario** — a timeline of setpoints — on the **simulated time**, and publishes the mission setpoint. It is the single source of setpoints of the binary |
+| `Recorder` (`recorder.rs`) | writes one CSV row per pass of the processes pipeline: the measured state, the setpoint and the motor commands of that pass |
+| `report` (`report.rs`) | reads a recording back, measures it, and judges it against the scenario's predictions: **PASS**, **FAIL** or **INVALID RUN** |
+
+## The bench
+
+- **Free flight.** The OSPRAI spawns **20 m** above the ground (`classic_env.sdf`) and Gazebo starts **paused**. In stabilize mode the thrust equals the weight and nothing commands a climb, so the vehicle cannot take off by itself; and a test on the ground with thrust = weight is ill-posed (see [the test rig](../pipelines/motor-control/validation.mdx#the-test-rig)). Starting in the air, paused, avoids both.
+- **Why so high.** At Play the rotors spin up from their minimum thrust, and the vehicle falls for a few tens of milliseconds. The vertical speed it picks up, about 0.5 m/s, is **never corrected**: stabilize mode holds the attitude and compensates the weight, nothing more. From 2 m the vehicle touched the ground after about 4 s, before the end of the step. From 20 m it flies for more than 30 s. The report checks the altitude anyway.
+- **The clock.** Every pose is stamped with the **simulated time** (`header.stamp` of the Gazebo messages), never the wall clock. The scenario starts at the first simulated time the player sees, i.e. when you press Play.
+
+The chain, in the order of the main processes pipeline:
+
+```
+osprai → scenario_player → remote → attitude → mixer → recorder
+```
+
+The bridge publishes the pose of the pass. The player reads its simulated time and publishes the setpoint. The attitude stage consumes both in the same pass. The recorder, registered last, sees the whole pass.
+
+## Procedure
+
+Terminal 1, from the repository root: Gazebo, **without `-r`**, so that the world starts paused.
+
+```bash
+export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:$(pwd)/gazebo_simulation/vehicles
+gz sim -v 4 gazebo_simulation/environments/classic_env.sdf
+```
+
+Terminal 2, from `gazebo_simulation/gazebo_vehicles_controller`: the controller, with a scenario and a **new** recording file.
+
+```bash
+cargo run --release -- --scenario roll_step --record runs/roll_step_1.csv
+```
+
+1. Wait for `[SCENARIO] roll_step (...) ready: press Play in Gazebo`.
+2. Press Play.
+3. Wait for `[SCENARIO] roll_step finished at t = 9.00 s (simulated)`, then stop the controller with Ctrl-C.
+4. Judge the recording (Gazebo is not needed for this step):
+
+```bash
+cargo run --release -- report runs/roll_step_1.csv
+```
+
+The recorder **refuses an existing file**: it never overwrites a run (nor a log). Give every run a new name. `runs/` is ignored by git.
+
+Without `--scenario`, the controller plays `hover`; without `--record`, nothing is recorded.
+
+## The catalogue
+
+| Id | Name | Timeline | Checks |
+|---|---|---|---|
+| S0 | `hover` (default) | level, forever | tilt ≤ 0.5° from 1 s on |
+| S1 | `roll_step` | level from 0 to 3 s, roll +10° at 3 s, level again at 6 s, end at 9 s | the S0 tilt check on [1 s, 3 s]; the roll at the end of the hold (5.99 s); the two edges shown for information: fraction of the step covered at τ, 2τ, 3τ, and the overshoot |
+
+The 1 s margin of the tilt check covers the start-up: at Play the rotors spin up from their minimum thrust, and the vehicle drops a few centimetres. The tilt is measured from `q` itself: the angle between the body z axis and the world z axis.
+
+## The predictions, and where they come from
+
+The tuning wired in `main.rs` is `τ = 0.2 s`, `ζ = 1`, with the processes pipeline at 100 Hz (`T = 10 ms`).
+
+The ideal second order gives 26.4 / 59.4 / 80.1 % of a step covered at τ / 2τ / 3τ ([cascaded control](../math/cascaded-control.mdx)). The real chain also has the [actuation-delay budget](../math/cascaded-control.mdx#the-actuation-delay-budget), one period plus the rotor lag. The model that counts it is `docs/scripts/delay_budget_reference.py`.
+
+**Free flight adds the drag.** Tilted, the vehicle slides sideways: 0.3 m/s at 3τ, 2.7 m/s at the end of the hold. The air pushes on the rotors against the sliding, `F = −b·v`, and the rotors sit `h` above the CoM: a moment that pushes the roll back. The attitude law has no integrator, so the roll settles below its setpoint ([a constant disturbing moment leaves a steady error](../math/cascaded-control.mdx#a-constant-disturbing-moment-leaves-a-steady-error)). With `--drag` and `--drag-arm`, the model simulates the sliding velocity and this moment.
+
+### Identifying the vehicle in flight
+
+Every parameter of the model is **measured on a recording**, never read from the simulator: no SDF aerodynamic or motor constant. Each one comes from data a real robot also has: IMU, velocity estimate, motor commands, ESC and servo feedback, and the vehicle description (mass, CoM, rotor positions and spins, joint axes). The same procedure therefore runs unchanged on the real vehicle. The script is generic: the vehicle comes as arguments.
+
+```bash
+python3 docs/scripts/identify_vehicle.py gazebo_simulation/gazebo_vehicles_controller/runs/roll_step_A.csv \
+    --mass 1.2 --com 0 0 0.016667 --rotor 64 0 0.30 0.10 ccw --rotor 179 0 -0.30 0.10 cw \
+    --joint 74 64 0 1 0 --joint 189 179 0 1 0 --inertia 0.017 0.0239 0.0357 --tau 0.2
+```
+
+| Parameter | Measured from | Runs A / B (before #9) | Cross-check |
+|---|---|---|---|
+| lateral drag `b` | accelerometer against body velocity, while sliding: `m·a_y = −b·v_y` | 0.1122 / 0.1121 N per m/s, R² 0.998 | the gyro (moments fit): 0.1121 |
+| lever arm `h` | geometry: rotor height above the CoM | 0.0833 m | — |
+| rotor time constants | commands against feedbacks, least squares over every interval | 11.5 ms up, 24.5 ms down | run 2: 14.0 / 26.5 ms (see [the green run](#the-green-run-bug-9-fixed)) |
+| roll inertia | gyro, moments fit | 0.0170 kg·m² | the controller's 0.0170 |
+| rotor gyroscopic coefficient `c` | gyro, roll and yaw fits | 0.104 (roll), 0.106 (yaw) | the same on both axes |
+| rotor drag torque `k_m` | gyro, yaw fit | 0.016 N·m per N | — |
+| roll moment ratio | commands against the attitude law, recomputed offline | 0.626 / 0.625 | bug #9: 0.30 / 0.48 = 0.625 |
+
+Two cross-checks make these numbers trustworthy:
+- the gyro finds the drag moment that `b` (accelerometer) and `h` (geometry) predict. These are two independent sensors;
+- the gyro finds the controller's roll inertia. Without the gyroscopic term the roll fit only reaches R² = 0.81, and its inertia changes with the length of the window (0.018 to 0.020 kg·m²): a missing term, not a wrong inertia.
+
+A synthetic recording with known parameters (closed loop, gyroscopic coupling, drag, rotor lags with a transport delay) is recovered within 1 %.
+
+### What is judged, and why
+
+| `roll_step` | Predicted (green) | Tolerance | Status |
+|---|---|---|---|
+| roll at the end of the hold (5.99 s) | **6.43°** | ± 0.5° | **check** |
+| edge 1 (0° → 10°): fraction at τ / 2τ / 3τ, overshoot | 26.2 / 61.9 / 80.2 %, 0 % | — | information |
+| edge 2 (6.4° → 0°): fraction at τ / 2τ / 3τ, overshoot | 44.2 / 102.6 / 134.7 %, 55.5 % | — | information |
+
+```bash
+python3 docs/scripts/delay_budget_reference.py --scenario roll_step --drag 0.1122 --drag-arm 0.0833 --rotor-tau 0.0115 0.0245
+```
+
+**The held roll is a steady state**: the drag moment balances the law's angle term. It depends on `b`, `h` and the moment ratio, and on nothing else.
+- With `b` off by 15 %, it moves by 0.3°. With the moment ratio off by 3 %, by 0.1°.
+- The control period does not matter: 6.43° from 7.5 ms to 12.5 ms.
+
+Hence ± 0.5°.
+
+**The edges are not judged**, because of a coupling the model does not have: **roll → yaw → arms → roll**.
+1. A roll step speeds one rotor up and slows the other down. A rotor that changes speed pushes back on the airframe about its axis, like a spinning top's base, and the two counter-rotating rotors add up. Hence a yaw kick, of 4.5°/s on runs A and B.
+2. The mixer holds the yaw by tilting the two arms in opposite directions.
+3. Tilting a spinning rotor gives a **gyroscopic** torque about the third axis, like tilting a bicycle wheel held by its axle: here, a **roll** torque. It helps at first, so the vehicle starts faster than predicted; it brakes when the arms swing back, so the vehicle is slower at 2τ and 3τ.
+
+This is physics, not a defect of Gazebo: the real vehicle has the same coupling. It was identified (the term `c` above), but modelling it needs the yaw axis, the arms' servo response and the mixer's allocation. On runs A and B it moves the fractions by up to 7 points.
+
+The falling edge starts from the held roll (6.4°), and the drag, still pushing while the vehicle slides, carries the roll past level: hence fractions above 100 %.
+
+One more effect is not in the model: the IMU publishes at 250 Hz and the loop reads it at 100 Hz, so the pose a pass consumes is 0 to 4 ms old. Running the model with that extra age moves the fractions by less than 1 point.
+
+### The red run: bug #9
+
+Before bug #9 was fixed, the bridge never re-expressed a rotor's position in its arm's frame. The mixer therefore believed the rotors were at `y = ±0.48 m` (arm 0.18 + rotor 0.30), while they really are at `±0.30 m`. For a roll moment `M` it commanded the differential thrust `±ΔT` with `ΔT = M / (2 × 0.48)`, which really produces `2 × 0.30 × ΔT = 0.625·M`. Every roll moment the law asked for was delivered at 62.5 %. The identification measures it directly: a moment ratio of 0.626 on run A and 0.625 on run B.
+
+A fraction `g` of the moment scales both gains of the law by `g`:
+
+```
+ωn_eff = √g / τ
+ζ_eff  = ζ · √g          g = 0.625  →  ζ_eff = 0.79
+```
+
+The loop is softer. Against the drag, it also holds a smaller roll: the same drag moment needs a larger angle error when only `g` of the law's moment is delivered.
+
+```bash
+python3 docs/scripts/delay_budget_reference.py --scenario roll_step --moment-gain 0.626 --drag 0.1122 --drag-arm 0.0833 --rotor-tau 0.0115 0.0245
+```
+
+| `roll_step` with bug #9 | Predicted | Measured, runs A / B / 1 |
+|---|---|---|
+| roll at the end of the hold | **4.78°** | 4.77 / 4.77 / 4.78° |
+| edge 1: fraction at τ / 2τ / 3τ (information) | 18.9 / 55.0 / 80.0 % | 19.6 / 50.9 / 76.3 % |
+
+The red hold falls 1.6° outside the green band: the report says **FAIL**. Once the bug is fixed, it must say **PASS**. Running both proves two things: the report can detect a real defect, and diagnosis #9 is confirmed by a measurement.
+
+### The green run: bug #9 fixed
+
+Run 2 (`runs/roll_step_2.csv`, the bridge with fix #9) says **PASS**, and the identification confirms what changed and what did not:
+
+| `roll_step`, run 2 | Predicted | Measured |
+|---|---|---|
+| roll at the end of the hold | 6.43° ± 0.5° | **6.40°** |
+| roll moment ratio | 1.00 | **1.007** |
+| `b`, roll inertia, `c`, `k_m` (properties of the vehicle) | unchanged | 0.1122 N per m/s, 0.0170 kg·m², 0.1035, 0.0158 N·m per N |
+| edge 1: fraction at τ / 2τ / 3τ (information) | 26.2 / 61.9 / 80.2 % | 26.7 / 57.0 / 78.8 % |
+
+The edge shows the signature of the coupling again: slightly faster than the model at τ, slower at 2τ.
+
+Run 2 found the rotor time constants at 14.0 ms (up) and 26.5 ms (down), against 11.5 ms and 24.5 ms on runs A and B. The one-step fit partly trades the transport delay (0 to 3 ms within a control interval) against the lag, so they are known to about ± 2.5 ms. The held roll does not depend on them.
+
+### Run 3: bug #12 fixed
+
+Run 3 (`runs/roll_step_3.csv`) adds fix #12, the sign of the rotors' reaction moment, to fix #9. The roll does not see it: the report says **PASS** again (held roll 6.40°), and the identification is unchanged (moment ratio 1.004). Its effects are on the yaw, measured as the **body-frame** error the law corrects:
+
+| Yaw | Run 2 (#12 present) | Predicted | Run 3 |
+|---|---|---|---|
+| error at the end of the hold | +0.151° | < 0.02° | **−0.015°** |
+| error level, at the end of the run | +0.121° | ≈ 0 | **+0.006°** |
+| peak yaw rate, edges 1 / 2 | 7.4 / 7.9°/s | unchanged | 6.0 / 7.1°/s |
+
+The yaw kick of an edge is the reaction torque of the rotors changing speed, about 100 % of it on every run. The prediction "unchanged" missed a chain: with the right sign, the mixer tilts the arms at once at the edge, the tilted rotors roll the vehicle faster, the law asks for less differential thrust, and the reaction torque is smaller ([the mixer's gyroscopic torque](../pipelines/motor-control/mixer.mdx#7-what-the-mixer-does-not-model-yet-the-rotors-gyroscopic-torque)).
+
+**What the vehicle does after the step is expected in stabilize mode.** At the end of the hold it slides at 3.3 m/s. Nothing controls the velocity or the position, so it keeps drifting along y: 15.7 m at 15 s. While it slides it keeps a small roll, 1.41° per m/s of sliding speed, which decays with that speed ([a constant disturbing moment](../math/cascaded-control.mdx#a-constant-disturbing-moment-leaves-a-steady-error)). The velocity loop (brick 5) will remove both. Run 3 is the baseline of brick 3.
+
+**Open point.** The pitch keeps a steady error: −0.27° (body frame) during the hold, −0.14° level, the same on runs 2 and 3. Hypothesis, not verified: on a bicopter the common tilt of the arms produces both the force along x and the pitch moment, one actuator mode for two demands, and the least squares settle on a compromise. To be studied with the resolver.
+
+## Reading the report
+
+The report separates two questions.
+
+**Is the run comparable with the predictions?** If any of these lines fails, the verdict is **INVALID RUN** (exit code 2). It says nothing about the stack: redo the measurement.
+
+Only the **scripted part** of the scenario is judged, from Play to the end of its timeline: rows recorded after it are ignored, so a controller left running a few seconds after the end, or a Gazebo paused before the Ctrl-C, does not spoil the verdict.
+
+| Validity line | Expected | Why |
+|---|---|---|
+| simulated time per control update (mean) | 0.75 `T` to 1.25 `T` | the predictions assume one control update per period of **simulated** time. A control update is a pass that received a new pose. Over this range the predictions move by 1.2 points at most |
+| longest simulated gap between two updates | ≤ 2 `T` | at most one missed update in a row |
+| lowest altitude | ≥ 0.5 m | a ground contact is outside what the predictions model |
+| roll edges recorded | as many as the timeline has | the recording was stopped too early |
+
+Two more lines are printed **for information only**: the real-time factor of Gazebo, and the share of passes that received no new pose. The latter is not a fault of the stack. Gazebo stalls for about 20 ms every 130 ms or so, most likely while it renders its sensors (lidar, cameras). During a stall the controller keeps running on the wall clock and repeats its pass on the same pose, but the **physics does not move**: in simulated time, nothing is delayed. That is why validity is judged on the simulated time between two control updates, and not on the ratio of fresh poses (88 % on a correct run).
+
+**Does the stack do what was predicted?** These are the checks. Any failure gives **FAIL** (exit code 1). Every line shows the measured value, the predicted value with its tolerance, and `ok` or `FAIL`. A line with no mark is **information**: it shows the measured value next to the model's, and never fails. The edges of `roll_step` are such lines (see [what is judged](#what-is-judged-and-why)).
+
+The step response is measured from the value **measured** at the edge, not from the old setpoint, because the vehicle never sits exactly on it:
+
+```
+f(t) = (y(t) − y_edge) / (y_target − y_edge)
+```
+
+`f` is 0 at the edge and 1 on target, whatever the direction of the step. It is read at τ, 2τ and 3τ by linear interpolation in simulated time. The 2 % settling time is taken right after the **last** sample outside the band, not at the first entry into it.
+
+## The recording
+
+| Line | Content |
+|---|---|
+| 1 | `# scenario=<name> period_s=<T>` |
+| 2 | the column names |
+| then | one row per pass, from the first pass that has a stamped pose |
+
+| Columns | Content | Frame / unit |
+|---|---|---|
+| `t_wall_s`, `t_sim_s`, `fresh` | wall time since start, simulated time of the pose, 1 if the pose is new this pass | s |
+| `qw qx qy qz`, `roll pitch yaw` | measured attitude, and its Euler angles (display) | body→world, rad |
+| `wx wy wz` | gyro | body, rad/s |
+| `ax ay az` | accelerometer: specific force, about (0, 0, +9.81) in a level hover | body, m/s² |
+| `vx vy vz`, `px py pz` | velocity and position (odometry) | **world**, m/s and m |
+| `qd_*`, `roll_d pitch_d yaw_d`, `vd_*` | the setpoint of the pass | body→world, rad; world, m/s |
+| `motor_cmds` | the motor commands of the pass, `id=value` pairs sorted by id | N (thruster), rad (joint) |
+| `motor_fb` | the latest feedback of each motor (rotor thrust, arm angle), same format | N (thruster), rad (joint) |
+
+A missing value is an **empty** field, never a zero (P3). A non-finite value is written `NaN` or `inf`, and the report counts them.
+
+## Adding a scenario
+
+1. Add an arm to `scenarios::by_name` with its segments (`start_s`, `q_d`, `v_d`) and its checks, and add its name to `NAMES`.
+2. **Compute the predictions before the first run**, and write in a comment where each number comes from.
+3. Add a row to the catalogue above.
+4. Check that the report fails on a known defect before trusting it to pass.

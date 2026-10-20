@@ -11,7 +11,7 @@ The first robotics pipeline of the stack. It answers one question: **given a des
 <figcaption>Solid arrows: the scheduler pipe, within one pass. Dashed arrows: broadcast channels.</figcaption>
 </figure>
 
-All four processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → attitude → mixer`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx).
+All the processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → scenario_player → remote → attitude → mixer → recorder`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx). The bridge only measures and actuates; the setpoint comes from the scenario player, the single source of setpoints, and the recorder (optional) writes one CSV row per pass — see [Running scenarios](../../simulation/running-scenarios.mdx).
 
 ## Stage contracts
 

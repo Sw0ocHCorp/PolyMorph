@@ -32,6 +32,61 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 
 ---
 
+### 2026-10-20 — Fix odometry frame, rotor positions, CoM and rotor torque signs; add a scenario test bench
+
+#### Fixed
+- Gazebo bridge (`osprai_controller.rs`):
+  - **#1, odometry.** The velocity was rebuilt by feeding the quaternion's x, y, z to three `from_axis_angle` calls, as if they were Euler angles. Now `q_odom` is a `UnitQuaternion` built from (w, x, y, z), and `l_velocity = q_odom · v_body`: Gazebo's twist is in the **body** frame. `Pose.l_velocity` and `relative_location` are documented in the **world** frame.
+  - **#9, rotor positions.** The subtraction that places a rotor relative to its arm acted on a copy (`Vec3` is `Copy`) and was dropped. The mixer therefore placed the rotors at (0, ±0.48, 0.20) instead of (0, ±0.30, 0.10), and delivered 62.5 % of the demanded roll moment (0.626 measured in flight). Each child is now placed at `p_child − p_parent`, computed from a snapshot of the model positions, so the result depends neither on the visit order nor on the depth of the tree.
+  - **#12, sign of `moment_constant`.** The left rotor, which spins counter-clockwise, had +0.016: the sign of the right one. The mixer expected the yaw torque of a differential thrust the wrong way round, and its compensation by the arms added to it. Now −0.016 for the left rotor (ccw) and +0.016 for the right one (cw): `k_m` is the reaction moment on the **airframe**. Found by the in-flight identification (`k_m = 0.0158` with that sign), confirmed by the SDF's `turningDirection`. Yaw error during a roll hold, in the body frame: +0.151° → −0.015°.
+  - Pose, IMU and GNSS are stamped with the **simulated** time (`header.stamp`), not the wall clock.
+  - A missing value starts as `None` (P3), not zero: `l_velocity` and `relative_location` before the first odometry message.
+  - No high-rate print by default (`verbose` is false). Prints are collected and emitted once the locks shared with the control thread are released.
+- `MotorsMixer`:
+  - **#11, CoM.** The CoM is now **subtracted** from the root motor positions; it was added, which was harmless only while it was zero. `main.rs` sets its real value, (0, 0, 1/60 m). New test `lever_arms_are_measured_from_the_com`.
+  - The convergence test no longer computes 0/0 when the previous residual is zero. While Gazebo was paused, that flooded the console with NaN warnings.
+  - Per-pass prints behind `verbose`, like those of `AttitudeController`.
+- `model.sdf`, **#10**: the header said the arms rest at +π/2 about Y, with the thrust up at −π/2. They rest at identity: tilt 0 points the thrust up.
+
+#### Added
+- **Scenario test bench**, in `gazebo_vehicles_controller/src/scenarios/`:
+  - `ScenarioPlayer`: plays a timeline of setpoints on the **simulated** clock. It is the single source of the mission setpoint; the bridge no longer publishes one.
+  - `Recorder`: one CSV row per pass (measured state, setpoint, accelerometer, motor commands and feedbacks). It never overwrites a file.
+  - `report`: first the **validity** of the run (simulated time per control update, longest gap, lowest altitude, edges recorded; only the scripted part of the scenario is judged), then the **checks**. Verdict PASS / FAIL / INVALID RUN, exit code 0 / 1 / 2.
+  - Scenarios `hover` (S0) and `roll_step` (S1). The `roll_step` check is the roll at the end of the hold, 6.43° ± 0.5°. Its two edges are shown for information, next to the model's prediction.
+  - Command line: `--scenario <name>`, `--record <file.csv>`, and `report <file.csv>`.
+- `docs/scripts/identify_vehicle.py`. It identifies the vehicle from a recording only: IMU, velocity, motor commands and feedbacks, plus the vehicle description given as arguments. Nothing comes from the SDF, and nothing is specific to one vehicle. It gives:
+  - the lateral drag;
+  - the rotor time constants;
+  - per axis, the rigid-body moments: inertia, rotor gyroscopic coefficient, rotor drag torque;
+  - the ratio of commanded to demanded moment.
+  On a synthetic flight with known parameters, it recovers them within 1 %.
+- `delay_budget_reference.py`: `--drag`, `--drag-arm`, `--rotor-tau` and `--scenario roll_step`. The default output and the documentation figure are unchanged.
+- Documentation:
+  - `simulation/running-scenarios`: procedure, identification, what is judged and why, the red and green runs;
+  - `math/cascaded-control`: "A constant disturbing moment leaves a steady error";
+  - `mixer` §7: the rotors' gyroscopic torque, not modelled yet;
+  - `framework/scheduler`: rewritten after `2681708`, with the incident of the open attitude loop. Rules on prints in `conventions`, terms *pass*, *grid* and *pipe* in the glossary;
+  - `lessons`: free flight, identification in flight, #9, #12, method;
+  - the sign convention of `moment_constant` in `messages`, the glossary and `gazebo`.
+
+#### Changed
+- Main pipeline: `osprai → scenario_player → remote → attitude → mixer → recorder`, all at 100 Hz. The draft `SpeedController` is no longer registered: the bench flies in stabilize mode, and the velocity loop comes with brick 5.
+- `classic_env.sdf`: the OSPRAI spawns 20 m above the ground and the world is launched paused. `model.sdf`: odometry at 250 Hz.
+- `.gitignore`: the recordings in `runs/`.
+
+#### Validation (red, then green)
+- Runs 1, A and B, without #9: held roll 4.77–4.78°, against 4.78° predicted for the red run. **FAIL**, as intended.
+- Run 2, with #9: held roll 6.40° (6.43° ± 0.5° predicted), moment ratio 1.007. **PASS**.
+- Run 3, with #9 and #12: **PASS**, with a yaw error during the hold of −0.015° in the body frame. Run 3 is the baseline of brick 3.
+
+#### Known issues
+- The roll → yaw → arms → roll coupling is neither modelled nor compensated. It is the gyroscopic torque of the rotors: the reaction to a change of speed, and the precession of a tilted rotor. Because of it, the edge fractions differ from the model by up to 7 points. A generic compensation from the motor tree is planned.
+- The arm servos yield under that gyroscopic load: about 3 mrad at 15°/s of roll rate. The mixer believes the commanded angles.
+- A steady pitch error of −0.27° remains during a roll hold. Hypothesis, not verified: the common tilt of the arms produces both the force along x and the pitch moment, and the least squares settle on a compromise. To be studied with the resolver.
+- After a step, in stabilize mode, the vehicle keeps drifting (3.3 m/s, 15.7 m) and keeps a roll proportional to its sliding speed. This is expected, and the velocity loop (brick 5) will remove it.
+- The rotor time-constant fit partly trades the transport delay against the lag: the values differ by about ± 2.5 ms between runs.
+
 ### 2026-10-18 — Fix processes time shifting and non expected data drops between processes tasks executions
 
 #### Added

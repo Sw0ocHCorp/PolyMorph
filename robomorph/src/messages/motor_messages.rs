@@ -334,6 +334,9 @@ pub struct MotorModel {
     /// effort axis. Carries the sign of the spin direction; `0` when there is none.
     /// `k_m` in N.m per N of thrust, along the thrust axis. SIGNED by the spin direction:
     /// counter-rotating rotors need opposite signs so that their reaction torques cancel at hover.
+    /// Sign convention: it is the moment on the AIRFRAME. A rotor spinning counter-clockwise about
+    /// its effort axis (right-hand rule) drags the airframe the other way, so `k_m < 0`; clockwise
+    /// gives `k_m > 0`.
     #[prost(double, tag = "11")]
     pub moment_constant: f64,
     /// Maximum rotational speed of the motor (rad/s) - the command ceiling of a thruster.

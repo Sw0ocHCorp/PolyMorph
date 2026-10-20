@@ -132,6 +132,28 @@ This reading has a name: **state feedback**. The rotational state of a rigid bod
 
 The whole cascade follows this pattern: each stage is a pure P on its own error, and the derivative it needs for damping is supplied by the stage below, which servos the derived quantity ("the velocity loop *is* the position loop's D term"). Numerical differentiation — the classic PID's main noise source — does not exist in the chain.
 
+## A constant disturbing moment leaves a steady error
+
+The attitude law has no integrator. Under a constant disturbing moment, the vehicle does not come back to its setpoint: it settles where the law's moment cancels the disturbance. At rest, `ω = 0` and `α = 0`, and the law's moment is its angle term only:
+
+```
+g · I · e_R / τ²  +  M_d  =  0      ⟹      e_R = −τ² · M_d / (g · I)
+```
+
+- `e_R`: vector, 3 components, body frame, rad. The steady attitude error, `q⁻¹ ⊗ q_d` as a rotation vector.
+- `M_d`: vector, 3 components, body frame, N·m. The disturbing moment.
+- `I`: 3×3 matrix, diagonal in practice, kg·m². The inertia the law multiplies by, `VehicleKinematicConfig.moments_matrix`; despite its name, it holds moments of **inertia**. Taken axis by axis, so the division is element-wise.
+- `g`: scalar, no unit. The fraction of the law's moment that the allocation really delivers: 1 when it is right.
+- `τ`: scalar, s. The law's time constant.
+
+The error grows with `τ²`, because a softer loop gives way more, and with `1/g`, because an allocation that delivers only part of the moment needs a larger error to produce the same moment.
+
+**Free flight is the typical case.** A rolled vehicle slides sideways, and the drag on its rotors, `F = −b·v`, acts `h` above the CoM: a moment that grows with the sliding speed and pushes the roll back. On the scenario bench, the 10° hold ends at **6.43°** predicted and **4.78°** with bug #9 (`g = 0.626`), and 4.8° was measured ([running scenarios](../simulation/running-scenarios.mdx#what-is-judged-and-why)).
+
+The same law holds after the step, while the vehicle is still sliding: the roll keeps an error proportional to the sliding speed, 1.41° per m/s measured on the bench against `τ²·h·b/I` = 1.26° per m/s. That error tilts the thrust against the slide, which is why the sliding speed decays in 3.0 s, measured and predicted (`1 / (b/m + g·k)`, with `k` that error per m/s), instead of `m/b` = 10.7 s for the drag alone.
+
+This is not a defect of the attitude stage. Removing a constant bias is the job of the single integrator of the cascade, in the velocity loop below. Once that loop holds `v ≈ 0`, the vehicle no longer slides, and the drag moment disappears.
+
 ## Where the integrator lives, and windup
 
 An integral term corrects constant biases (wind, mis-estimated mass, thrust that does not match its model). Rule: **one integrator per physical quantity in the whole cascade**, and it lives in the **velocity loop** — the stage that sees those biases directly. Attitude does not need one (the gravity feedforward removes its main bias) and neither does position.
