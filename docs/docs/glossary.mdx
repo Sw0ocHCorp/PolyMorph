@@ -17,11 +17,11 @@
 | Symbol | Name | Unit / frame |
 |---|---|---|
 | `q_d` | desired attitude | — |
-| `ω_d` | desired angular rate (implicitly 0 in stabilize) | rad/s, body |
+| `ω_d` | desired angular rate, from the resolver (0 while it does not differentiate `q_d`) | rad/s, body |
 | `v_d` | desired linear velocity (velocity-loop input, position-loop output) | m/s, world |
 | `p_d` | desired position | m, world |
 | `a_d` | **desired linear acceleration** — output of the velocity law, the linear twin of `α`; a decision, never a measurement | m/s², world |
-| `f_d` | desired force, `m·a_d + m·g·ẑ`, before the force→attitude resolver | N, world |
+| `f_d` | desired force, `m·a_d + m·g·ẑ`, from the velocity stage, passed by the resolver to the attitude stage, which applies `q⁻¹` | N, world |
 | `yaw_d` | desired heading — the degree of freedom the force does not constrain | rad, world |
 
 ## Attitude error

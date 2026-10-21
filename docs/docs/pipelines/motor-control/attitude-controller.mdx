@@ -1,16 +1,16 @@
 # The attitude controller
 
-File: `robomorph/src/control/motion/attitude_controller.rs`. Stage v1 of the cascade (*stabilize* mode): it holds a desired attitude and compensates gravity.
+File: `robomorph/src/control/motion/attitude_controller.rs`. It holds a desired attitude, and turns the desired force into body coordinates for the mixer.
 
 ## Contract
 
 | | |
 |---|---|
 | **Measurements** | `q` (attitude, body→world) and `ω` (angular rate, body) — read from the same `Pose`, hence coherent |
-| **Setpoint** | `q_d`, carried by a `Pose`. `ω_d` is implicitly zero in the current implementation (stabilize); the setpoint's `a_velocity` is not read yet |
+| **Setpoint** | the setpoint `Pose` that comes down the pipe, its **single** source, held between two updates. Read: `orientation` (`q_d`), `imu_measurement.a_velocity` (`ω_d`, body) and `force` (`f_d`, **world**, weight compensation included). Any process may come before this stage, as long as it fills these three fields — today the [force → attitude resolver](resolver.mdx) |
 | **Output** | an **absolute** `AnyMessage::VehicleWrench` `[f_body ; M]` to the mixer (pipe), or `None` (abstention) |
 | **Tunings** | `τ` (s); `ζ` = 1 |
-| **Vehicle data** | `m` (`weight`), the diagonal of `I` (`moments_matrix`) |
+| **Vehicle data** | the diagonal of `I` (`moments_matrix`). The mass enters upstream, in `f_d` |
 
 ## The algorithm, cycle by cycle
 
@@ -23,11 +23,13 @@ File: `robomorph/src/control/motion/attitude_controller.rs`. Stage v1 of the cas
     e_R = 2·v          otherwise
 5.  α = (1/τ²)·e_R + (2ζ/τ)·(ω_d − ω)  (rad/s²)
 6.  M_k = I_k · α_k                     (N·m; k = x, y, z; element-wise with the inertia diagonal)
-7.  f_body = q⁻¹ · (0, 0, m·g)          (N; gravity feedforward)
+7.  f_body = q⁻¹ · f_d                 (N; the setpoint force, seen from the body)
 8.  publish [f_body ; M]
 ```
 
-Steps 1–4 are justified in [Frames and rotations](../../math/frames-and-rotations.mdx), steps 5–7 in [Cascaded control](../../math/cascaded-control.mdx).
+Steps 1–4 are justified in [Frames and rotations](../../math/frames-and-rotations.mdx), steps 5–7 in [Cascaded control](../../math/cascaded-control.mdx). The law abstains (`None`) as soon as one input is missing: `q` or `ω` in the measurement, `q_d`, `ω_d` or `f_d` in the setpoint.
+
+**Where the weight compensation went.** Until brick 3 this stage computed `q⁻¹·(0, 0, m·g)` itself. The weight compensation now arrives inside `f_d`, from the velocity stage (`f_d = m·(a_d + g·ẑ)`, with `a_d = 0` until the velocity loop exists), so that a single stage owns the force. The wrench is unchanged: in stabilize, `f_d = (0, 0, m·g)` exactly.
 
 **Dimensional check**: `rad × 1/s²` and `rad/s × 1/s` both give rad/s²; `kg·m² × rad/s²` gives N·m. An equation whose units do not balance is wrong before it runs — that check is what exposed a missing inertia factor (a moment of 885 "N·m" on an axis whose inertia is 0.017 kg·m²).
 

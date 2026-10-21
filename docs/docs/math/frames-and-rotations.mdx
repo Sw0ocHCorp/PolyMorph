@@ -41,7 +41,7 @@ q⁻¹ = (w, −x, −y, −z)          valid ONLY when ‖q‖ = 1
 
 Geometrically `q⁻¹` is the same rotation the other way (angle `−θ` about the same axis). It shows up wherever a world-frame quantity must be handed to a body-frame component:
 
-- **gravity feedforward**: the compensation force `(0, 0, m·g)` is known in the world; the mixer speaks body; hence `f_body = q⁻¹ · (0, 0, m·g)`.
+- **desired force**: `f_d` is known in the world (in stabilize, the weight compensation `(0, 0, m·g)`); the mixer speaks body; hence `f_body = q⁻¹ · f_d`.
 - **attitude error**: see below.
 
 Mnemonic: an arrow *bolted to the vehicle* has trivial coordinates in body (the thrust axis is always `(0,0,1)` there) — to know where it points in the world, use `q`. An arrow *planted in the world* has trivial coordinates in world (up is always `(0,0,1)`) — to know how the vehicle sees it, use `q⁻¹`.

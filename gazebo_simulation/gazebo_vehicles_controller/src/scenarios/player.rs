@@ -1,9 +1,10 @@
-//! `ScenarioPlayer`: plays a scenario on the SIMULATED clock and publishes the mission setpoint.
+//! `ScenarioPlayer`: plays a scenario on the SIMULATED clock and produces the mission setpoint.
 //!
-//! It is the single source of setpoints of the binary: one writer per setpoint channel, so a stage
-//! never sees two producers fighting over its setpoint. Registered right after the vehicle bridge,
-//! it reads the simulated time of the pose published in the same pass and publishes the setpoint
-//! the attitude stage consumes later in that pass [P4].
+//! It is the single source of setpoints of the binary, so a stage never sees two producers fighting
+//! over its setpoint. Registered after the vehicle bridge, it reads the simulated time of the pose
+//! published in the same pass, and hands the setpoint `Pose` (attitude preference, desired velocity)
+//! to the head of the control cascade through the PIPE, in the same pass [P4]. It also publishes it
+//! on its setpoint channel, for the recorder.
 
 use std::time::Duration;
 
@@ -37,7 +38,8 @@ impl ScenarioPlayer {
                         start_s: None, last_stamp: None, end_announced: false };
     }
 
-    /// The channel the motion stages read their setpoint from (`set_setpoint_receiver`).
+    /// The setpoint channel: a copy of each setpoint, for the processes that are not in the cascade
+    /// (the recorder).
     pub fn set_setpoint_sender(&mut self, sender: Sender<Pose>) {
         self.setpoint_sender= Some(sender);
     }
@@ -69,7 +71,7 @@ impl Process for ScenarioPlayer {
         setpoint.timestamp= Some(stamp);
         if let Some(setpoint_sender)= &self.setpoint_sender {
             // never blocks; an Err only means nobody listens, which is not an error here
-            let _= setpoint_sender.send(setpoint);
+            let _= setpoint_sender.send(setpoint.clone());
         }
         // 5. tell the operator, once, that the scripted part is over (the last setpoint is held)
         if !self.end_announced && self.scenario.is_finished(t_s) {
@@ -77,8 +79,8 @@ impl Process for ScenarioPlayer {
                         self.scenario.name, t_s);
             self.end_announced= true;
         }
-        // 6. nothing on the pipe: the setpoint travels on its channel
-        return None;
+        // 6. the setpoint goes down the pipe, to the head of the control cascade
+        return Some(AnyMessage::PoseState(setpoint));
     }
 
     fn set_receiver(&mut self, receiver: Receiver<AnyMessage>) {
@@ -106,3 +108,36 @@ impl Process for ScenarioPlayer {
         return self.period;
     }
 }
+
+/// The player's output: the setpoint of the scenario at the simulated time, handed to the next
+/// process through the pipe.
+#[cfg(test)]
+mod tests {
+    use prost_types::Timestamp;
+    use tokio::sync::broadcast::channel;
+
+    use crate::scenarios::by_name;
+
+    use super::*;
+
+    #[test]
+    fn the_setpoint_goes_down_the_pipe() {
+        // 1. the player of roll_step, and a telemetry channel carrying one stamped pose
+        let (telemetry, receiver)= channel(4);
+        let mut player= ScenarioPlayer::new("player".to_string(), by_name("roll_step").unwrap());
+        player.set_receiver(receiver);
+        // 2. no simulated time yet: no setpoint at all [P3]
+        assert!(player.exec(&None, Duration::from_millis(10)).is_none());
+        // 3. a pose stamped 10 s: the scenario starts there, t = 0, so the setpoint is level
+        let mut pose= Pose::default();
+        pose.timestamp= Some(Timestamp { seconds: 10, nanos: 0 });
+        assert!(telemetry.send(AnyMessage::PoseState(pose)).is_ok());
+        let Some(AnyMessage::PoseState(setpoint))= player.exec(&None, Duration::from_millis(10)) else {
+            panic!("no setpoint in the pipe");
+        };
+        // 4. level attitude preference, stamped with the simulated time it was computed for
+        assert_eq!(setpoint.orientation.map(|q| (q.w, q.x, q.y, q.z)), Some((1.0, 0.0, 0.0, 0.0)));
+        assert_eq!(setpoint.timestamp, Some(Timestamp { seconds: 10, nanos: 0 }));
+    }
+}
+

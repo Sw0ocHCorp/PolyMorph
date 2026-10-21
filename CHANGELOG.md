@@ -32,6 +32,50 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 
 ---
 
+### 2026-10-20 — All motion control pipeline processes linked
+
+#### Added
+- `VelocityController`:
+  + controller used to send target force vector to reach a specific velocity vector
+  + send gravity compensation for now
+- `Pose`:
+  + `force` param, expressed in the WORLD Frame, use to model the force produced by the object. `None` if the `Pose` comes from vehicle sensors measurements(for now) 
+
+#### Changed
+- `Pose`:
+  + used as the unique message type transmitted between processes of the motion controller pipeline. 
+  + pose setpoint transmitted between all the processes of the motion controller pipeline
+  + current pose can be sent from the telemetry process to the motion controller pipeline's processes that need it
+  + it is enriched by each processes of the pipeline, relative to their task and pass to the next process of the pipeline
+- `ForceToAttitudeResolver`:
+  + writes `ω_d` = 0 (desired angular velocity) and keeps `q_d` = `q_pref` (the mission orientation). Passes the force unchanged
+- `AttitudeController`:
+  + express the force to produce from the WORLD Frame to the vehicle BODY Frame.
+      Means the force to produce is rotated according to the vehicle orientation
+- `ScenarioPlayer`: 
+  + hands its setpoint down the pipe (head of the cascade); still publishes it on its channel, for the recorder
+- `gazebo_vehicles_controller/main.rs`:
+  + connect each mandatory processes of the motion control pipeline, for the OSPRAI vehicle.
+    * `osprai_controller`                 -> (current pose)                                 -> `scenario_player`
+      `osprai_controller`                 -> (current attitude)                             -> `attitude_controller`
+      `scenario_player`                   -> (pose setpoint: target orientation & velocity) -> `velocity_controller`
+      `remote_controller` (not connected) -> (pose setpoint: ???)                           -> `velocity_controller` 
+      `velocity_controller`               -> (same pose setpoint: force vector)             -> `force_to_attitude_resolver`
+      `force_to_attitude_resolver`        -> (same pose setpoint: target attitude)          -> `attitude_controller`
+      `attitude_controller`               -> (vehicle target wrench)                        -> `motors_mixer`
+      `motors_mixer`                      -> (one command per motor)                        -> `osprai_controller`
+      
+
+#### Removed
+- `SpeedController`:
+  + not useful because there are some errors that `VelocityController` fixed
+    * gravity vector rotated using vehicle orientation
+    * `-m.g` in the gravity vector
+    * accelerations substracted from a velocity
+- `AnyMessage`:
+  + `ForceVec`: is no more an `AnyMessage` because its now, a `Pose` message param
+
+
 ### 2026-10-20 — Fix odometry frame, rotor positions, CoM and rotor torque signs; add a scenario test bench
 
 #### Fixed

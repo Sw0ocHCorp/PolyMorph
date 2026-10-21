@@ -4,15 +4,17 @@ import Diagram1 from './img/resolver.svg';
 
 The stage between the velocity loop and the attitude loop. It answers one question: **which attitude must the vehicle take so that the force it is asked for becomes producible?** — and it answers it for any vehicle, from the data that describes it.
 
+> **Status.** Since brick 3 the stage is in place, reading and filling its final fields of the setpoint `Pose`, as a **stub**: `q_d = q_pref`, `ω_d = 0`, `f_d` unchanged (`robomorph/src/control/motion/force_to_attitude_resolver.rs`). In stabilize this is already the exact answer, since `f_d = (0, 0, m·g)` is producible at the preferred, level attitude. The alignment described below comes with brick 4.
+
 ## Contract
 
 | | |
 |---|---|
-| **Inputs** | `f_d`: desired force, **world** frame, N (from the velocity loop; in stabilize, the constant `(0, 0, m·g)`) |
-| | `q_pref`: attitude **preference**, from the external mission setpoint (`Pose.orientation`) |
+| **Inputs** | `f_d`: desired force, **world** frame, N — the `force` field of the setpoint `Pose`, filled by the velocity stage (in stabilize, the constant `(0, 0, m·g)`) |
+| | `q_pref`: attitude **preference** — the `orientation` field of the same `Pose`, filled by the mission |
 | | `q`: current attitude — only for tie-breaking and hysteresis, never for the alignment itself |
 | **Vehicle data** | the reachable force subspace `S` (body frame) and the authority axes `𝒜` — both derived from the motor tree at start-up, see below |
-| **Output** | the attitude stage's setpoint: `q_d`, `ω_d` (zero in v1), and `f_d` passed through unchanged (world, N) |
+| **Output** | the same `Pose`, handed on through the pipe: `orientation` ← `q_d`, `imu_measurement.a_velocity` ← `ω_d` (zero in v1); `force` passed through unchanged (world, N) |
 | **State** | the last valid alignment direction (guard against `‖f_d‖ → 0`) and, for bidirectional thrusters, the last forward/reverse choice (hysteresis). Nothing else. |
 
 `f_d` is **not** consumed here: it travels down to the attitude stage, which rotates it into the body frame with `q⁻¹` and hands it to the mixer inside the wrench. While the vehicle is not yet aligned, the mixer serves the reachable projection of that force and leaves the rest in its residual — the transient sag this causes is corrected by the attitude loop within `τ`, and by the velocity loop's integrator for whatever remains.
@@ -90,13 +92,15 @@ For the OSPRAI this yields `S` = the body xz plane (`k = 2`, `v = ŷ`) and full 
 
 ## What the attitude stage receives
 
-The resolver emits the **internal** setpoint of the attitude stage — a message distinct from the external mission `Pose`, carrying:
+The resolver hands on the setpoint `Pose` it received, after filling the two fields it is responsible for (see [the setpoint `Pose` down the cascade](../../framework/messages.mdx#the-setpoint-pose-down-the-cascade)):
 
 | Field | Content | Frame / unit |
 |---|---|---|
-| `orientation` | `q_d` | — |
-| `angular_velocity` | `ω_d`, zero in v1 (a rate feedforward from the time derivative of `q_d` is a later refinement for fast-changing forces) | body, rad/s |
+| `orientation` | `q_d`, replacing the preference `q_pref` | — |
+| `imu_measurement.a_velocity` | `ω_d`, zero in v1 (a rate feedforward from the time derivative of `q_d` is a later refinement for fast-changing forces) | body, rad/s |
 | `force` | `f_d`, unchanged | **world**, N |
+
+There is no message reserved for this hand-over: any process that fills these three fields may stand before the attitude stage.
 
 The attitude stage rotates the force into the body frame and assembles the wrench `[q⁻¹·f_d ; M]`. In stabilize without a velocity loop, the resolver still runs: `f_d = (0, 0, m·g)` is reachable at the preferred attitude (level), `q_d = q_pref`, and the constant feedforward flows through the same path — no mode flag anywhere.
 

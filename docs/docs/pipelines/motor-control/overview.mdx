@@ -11,13 +11,15 @@ The first robotics pipeline of the stack. It answers one question: **given a des
 <figcaption>Solid arrows: the scheduler pipe, within one pass. Dashed arrows: broadcast channels.</figcaption>
 </figure>
 
-All the processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → scenario_player → remote → attitude → mixer → recorder`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx). The bridge only measures and actuates; the setpoint comes from the scenario player, the single source of setpoints, and the recorder (optional) writes one CSV row per pass — see [Running scenarios](../../simulation/running-scenarios.mdx).
+All the processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → scenario_player → velocity → resolver → attitude → mixer → recorder`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx). The cascade hands **one** setpoint `Pose` down the pipe, each stage enriching it — the velocity stage adds the force `f_d`, the resolver sets `q_d` and `ω_d` — and the attitude stage turns it into the wrench (see [the setpoint `Pose` down the cascade](../../framework/messages.mdx#the-setpoint-pose-down-the-cascade)). The bridge only measures and actuates; the mission setpoint comes from the scenario player, the single source of setpoints, at the head of the cascade; the recorder (optional) writes one CSV row per pass — see [Running scenarios](../../simulation/running-scenarios.mdx).
 
 ## Stage contracts
 
 | Stage | Measurement | Setpoint | Output | Frame |
 |---|---|---|---|---|
-| [Attitude controller](attitude-controller.mdx) | `q`, `ω` (IMU) | `q_d` | wrench `[f_body ; M]` | body |
+| Velocity stage (`VelocityController`) | — (law `a_d = 0` until brick 5) | setpoint `Pose` (mission) | the same, plus `force` = `f_d = m·(a_d + g·ẑ)` | world |
+| [Force → attitude resolver](resolver.mdx) | — | setpoint `Pose`: `force`, `orientation` (`q_pref`) | the same, with `orientation` = `q_d`, `ω_d` | world / body |
+| [Attitude controller](attitude-controller.mdx) | `q`, `ω` (IMU) | setpoint `Pose`: `q_d`, `ω_d`, `f_d` | wrench `[q⁻¹·f_d ; M]` | body |
 | [Mixer](mixer.mdx) | motor feedbacks (efforts) | wrench | one command per motor | body → per-motor |
 | [Vehicle controller](../../simulation/gazebo.mdx) | — | motor efforts | actuator units | hardware |
 
@@ -27,10 +29,11 @@ The **wrench** is the contract that makes each side replaceable: the mixer does 
 
 | | Status |
 |---|---|
-| Attitude loop (stabilize) + gravity feedforward | built, validated up to the static-equilibrium rung |
+| Attitude loop | built, validated on the scenario bench (`roll_step`) |
+| Velocity stage | in place, law `a_d = 0` (stabilize): it supplies the weight compensation `f_d = (0, 0, m·g)` |
 | Control allocation over an arbitrary motor tree | built, validated on the OSPRAI |
-| Velocity loop (`SpeedController`) | written, not yet validated — see [Lessons learned](lessons.mdx) |
-| Force → attitude resolver | [specified](resolver.mdx), being built |
+| Velocity loop | brick 5: its law (a PI on the velocity, with the generic `PIDController<Vec3>`) replaces `a_d = 0` in the velocity stage |
+| Force → attitude resolver | [specified](resolver.mdx); a stub (`q_d = q_pref`) since brick 3, the alignment comes with brick 4 |
 | Position loop | [planned](roadmap.mdx) |
 | Arming / spool-up sequencing, failsafe, data-age supervision | not started — belongs to a supervisor |
 

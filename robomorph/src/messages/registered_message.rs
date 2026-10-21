@@ -69,13 +69,12 @@ pub enum AnyMessage {
     /// `MotorsMixer` (through the pipe in the current wiring).
     VehicleWrench(WorkVec),
     /// Aggregated vehicle state (attitude, IMU, GNSS, position, velocity estimate). The same
-    /// variant carries the attitude SETPOINT.
+    /// variant carries the SETPOINT down the control cascade (see `Pose`).
     PoseState(Pose),
     /// One lidar sweep.
     LidarState(LidarMeasurements),
     /// Snapshot of the gamepad events seen during one `XboxPadControl` tick.
     RemoteControl(RemoteControl),
-    ForceVec(Vec3)
 }
 
 /// Protobuf wire form of `nalgebra::Vector3<f64>`. It *contains* a real `Vector3`, so every nalgebra

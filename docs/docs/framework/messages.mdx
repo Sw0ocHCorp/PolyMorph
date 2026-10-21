@@ -10,12 +10,25 @@ Files: `robomorph/src/messages/*.rs`.
 
 | Variant | Payload | Producer → consumer |
 |---|---|---|
-| `PoseState(Pose)` | vehicle state (attitude, IMU, GNSS…) | vehicle controller → attitude, UDP |
+| `PoseState(Pose)` | vehicle state (attitude, IMU, GNSS…); the same struct is the **setpoint** that goes down the control cascade, see below | vehicle controller → stages, UDP; scenario player → velocity → resolver → attitude (pipe) |
 | `VehicleWrench(WorkVec)` | wrench to produce, body frame, N / N·m | attitude → mixer (pipe) |
 | `MotorCommands(Vec<MotorCommand>)` | per-motor commands, in efforts | mixer → vehicle controller |
 | `MotorState(MotorFeedBack)` | one motor's feedback | reserved for external transport |
 | `ImuState`, `GnssState`, `LidarState` | raw samples | outward |
 | `RemoteControl` | gamepad state | remote → (unused today) |
+
+### The setpoint `Pose` down the cascade
+
+One message travels through the pipe from the mission to the attitude stage: a `Pose`. Each stage **reads** the fields it needs and **fills** the fields it produces, then hands it on. Any process may stand before a stage, as long as it fills the fields that stage reads: a gamepad stage that sets an attitude and a thrust could feed the attitude stage directly.
+
+| Field | Content | Frame / unit | Filled by | Read by |
+|---|---|---|---|---|
+| `orientation` | `q_pref` (mission), then `q_d` | body → world | mission, then resolver | resolver, attitude |
+| `l_velocity` | `v_d`, desired velocity | world, m/s | mission | velocity (brick 5) |
+| `imu_measurement.a_velocity` | `ω_d`, desired angular rate | body, rad/s | mission (zero), then resolver | attitude |
+| `force` | `f_d`, desired force, weight compensation included | **world**, N | velocity | resolver, attitude |
+
+A stage **abstains** (`None`) when a field it reads is missing [P3]; the next stage then holds its last setpoint. In a measured state, `force` is `None`: it is a setpoint field only.
 
 ### Wire format
 

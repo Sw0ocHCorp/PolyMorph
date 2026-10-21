@@ -31,7 +31,7 @@ f_d = m·a_d + (0, 0, m·g)                     (N, world frame)
 - Same structure as attitude, one level up, in the **world** frame — where velocity means something, and where Gazebo's odometry provides it. `kp_v = 1/τ_v`, with `τ_v ≈ 5–10 × τ_attitude`.
 - **The cascade's only integrator lives here**: this is the stage that sees the constant biases (wind, mis-estimated mass, thrust that does not match its model). Its first job is already quantified: the roughly 0.1 % of weight discrepancy between the `k·ω²` model and Gazebo's real thrust, visible in stabilize as a slow constant-acceleration climb.
 - **Anti-windup by conditional integration**: accumulate only when the mixer reports the demand is serviceable. Its residual and its clamping already carry that information inside `compute_command_law`; it is worth surfacing in the return message.
-- The gravity feedforward moves here; the attitude stage then publishes moments only.
+- The gravity feedforward already lives here: since brick 3 the velocity stage outputs `f_d = m·(a_d + g·ẑ)` with `a_d = 0`, and the attitude stage only rotates `f_d` into the body frame. The velocity loop replaces `a_d = 0` by its law.
 - Saturate the incoming `v_d` to the vehicle's maximum speed.
 
 ## Force → attitude resolver

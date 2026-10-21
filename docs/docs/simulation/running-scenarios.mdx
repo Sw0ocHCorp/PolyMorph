@@ -17,10 +17,10 @@ The Gazebo test bench measures the stack against values **predicted before the r
 The chain, in the order of the main processes pipeline:
 
 ```
-osprai → scenario_player → remote → attitude → mixer → recorder
+osprai → remote → scenario_player → velocity → resolver → attitude → mixer → recorder
 ```
 
-The bridge publishes the pose of the pass. The player reads its simulated time and publishes the setpoint. The attitude stage consumes both in the same pass. The recorder, registered last, sees the whole pass.
+The bridge publishes the pose of the pass. The player reads its simulated time and hands the mission setpoint down the pipe; the velocity stage adds the force, the resolver the attitude to reach, and the attitude stage turns it into the wrench, all in the same pass. The recorder, registered last, sees the whole pass; the setpoint columns it writes are those of the mission.
 
 ## Procedure
 
@@ -174,6 +174,8 @@ Run 3 (`runs/roll_step_3.csv`) adds fix #12, the sign of the rotors' reaction mo
 The yaw kick of an edge is the reaction torque of the rotors changing speed, about 100 % of it on every run. The prediction "unchanged" missed a chain: with the right sign, the mixer tilts the arms at once at the edge, the tilted rotors roll the vehicle faster, the law asks for less differential thrust, and the reaction torque is smaller ([the mixer's gyroscopic torque](../pipelines/motor-control/mixer.mdx#7-what-the-mixer-does-not-model-yet-the-rotors-gyroscopic-torque)).
 
 **What the vehicle does after the step is expected in stabilize mode.** At the end of the hold it slides at 3.3 m/s. Nothing controls the velocity or the position, so it keeps drifting along y: 15.7 m at 15 s. While it slides it keeps a small roll, 1.41° per m/s of sliding speed, which decays with that speed ([a constant disturbing moment](../math/cascaded-control.mdx#a-constant-disturbing-moment-leaves-a-steady-error)). The velocity loop (brick 5) will remove both. Run 3 is the baseline of brick 3.
+
+**Runs 4 and 6 (brick 3) reproduce run 3.** Brick 3 moved the weight compensation out of the attitude stage, into the force `f_d` the velocity stage adds to the setpoint, and made the setpoint `Pose` go down the whole cascade through the pipe. The behaviour must not change, and it did not: held roll 6.39° and 6.40° (run 3: 6.40°), moment ratio 1.004, the same yaw error, the same identified drag and inertia. Edge 1 (information) differs by 0.5 point at most (25.4 / 55.3 / 78.1 % on run 6, against 25.8 / 55.8 / 78.5 %): the roll trajectories never differ by more than 0.05°, a few milliseconds of timing between runs.
 
 **Open point.** The pitch keeps a steady error: −0.27° (body frame) during the hold, −0.14° level, the same on runs 2 and 3. Hypothesis, not verified: on a bicopter the common tilt of the arms produces both the force along x and the pitch moment, one actuator mode for two demands, and the least squares settle on a compromise. To be studied with the resolver.
 

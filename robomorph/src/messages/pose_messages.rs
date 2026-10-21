@@ -1,6 +1,7 @@
 //! Vehicle state messages: the raw sensor samples (`IMUMeasurements`, `GNSSMeasurement`), the
-//! aggregated vehicle state `Pose` (also used as the SETPOINT of the attitude controller) and
-//! `Transform`, the resolved pose of a motor in the body frame computed by the mixer.
+//! aggregated vehicle state `Pose` (also the SETPOINT that goes down the control cascade, each stage
+//! filling its own fields) and `Transform`, the resolved pose of a motor in the body frame computed
+//! by the mixer.
 //!
 //! Frames: "body" is the frame attached to the vehicle; "world" is the inertial frame the attitude
 //! quaternion is expressed against, z up (the attitude controller compensates the weight along
@@ -87,9 +88,15 @@ pub struct Transform {
 /// Struct serializable / deserializable using protobuf that represent the pose of an object / vehcle
 ///
 /// Aggregate of the vehicle state as published by the vehicle controller (`AnyMessage::PoseState`,
-/// wire tag `MessageType::PoseMessage`). The SAME struct is used as the SETPOINT of the attitude
-/// controller: there only `orientation` is read (the target angular velocity is implicitly zero),
-/// while `orientation` and `imu_measurement.a_velocity` are read from the current state.
+/// wire tag `MessageType::PoseMessage`). The SAME struct is the SETPOINT that goes down the control
+/// cascade through the scheduler pipe, each stage reading what it needs and filling what it produces:
+///   - the mission (scenario player, remote control) fills `orientation` (the attitude preference
+///     q_pref), `l_velocity` (the desired velocity v_d) and `imu_measurement.a_velocity` (zero);
+///   - the velocity stage fills `force` (f_d, world);
+///   - the force -> attitude resolver overwrites `orientation` with q_d and
+///     `imu_measurement.a_velocity` with omega_d;
+///   - the attitude stage reads `orientation`, `imu_measurement.a_velocity` and `force`.
+/// Any process may stand before a stage, as long as it fills the fields that stage reads.
 #[derive(Clone, PartialEq, Message)]
 pub struct Pose {
     /// Time of the most recent sample written into this state. In the Gazebo bridge it is the
@@ -118,6 +125,12 @@ pub struct Pose {
     /// consumers do not change. `None` when no source is available [P3].
     #[prost(message, optional, tag = "6")]
     pub l_velocity: Option<Vec3>,
+    /// SETPOINT field: f_d, the force the vehicle must produce (N), in the WORLD frame [P7], weight
+    /// compensation included. Filled by the velocity stage as the setpoint `Pose` goes down the pipe,
+    /// passed on by the resolver, rotated into the body frame by the attitude stage (q^-1 f_d) to
+    /// build the force part of the wrench. `None` in a measured state, and before the velocity stage.
+    #[prost(message, optional, tag = "7")]
+    pub force: Option<Vec3>,
 }
 
 impl Translatable for Pose {

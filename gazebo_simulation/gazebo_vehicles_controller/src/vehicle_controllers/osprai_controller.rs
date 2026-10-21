@@ -92,7 +92,7 @@ impl OsprAiState {
             pose_state: Pose {timestamp: None , gnss_measurement: Some(GNSSMeasurement { timestamp: Some(now), latitude: 0.0, longitude: 0.0, altitude: 0.0, fix_status: 1 }), 
                                 relative_location: None, 
                                 orientation: Some(UnitQuat { w: 1.0, x: 0.0, y: 0.0, z: 0.0 }), 
-                                imu_measurement: Some(IMUMeasurements::default()), l_velocity: None},
+                                imu_measurement: Some(IMUMeasurements::default()), l_velocity: None, force: None},
             lidar_measurements: LidarMeasurements { timestamp: Some(now),
                 vertical_min_angle: 0.0, vertical_angle_resolution: 0.0, vertical_max_angle: 0.0,
                 horizontal_min_angle: 0.0, horizontal_angle_resolution: 0.0, horizontal_max_angle: 0.0,
@@ -118,7 +118,7 @@ impl OsprAiState {
                                 // divides by a zero norm and yields NaN. Until the first IMU message arrives this
                                 // value is used as the measured attitude, and a NaN here poisons the whole chain.
                                 orientation: Some(UnitQuat { w: 1.0, x: 0.0, y: 0.0, z: 0.0 }), 
-                                imu_measurement: Some(IMUMeasurements::default()), l_velocity: None},
+                                imu_measurement: Some(IMUMeasurements::default()), l_velocity: None, force: None},
             lidar_measurements: LidarMeasurements { timestamp: Some(now),
                 vertical_min_angle: 0.0, vertical_angle_resolution: 0.0, vertical_max_angle: 0.0,
                 horizontal_min_angle: 0.0, horizontal_angle_resolution: 0.0, horizontal_max_angle: 0.0,

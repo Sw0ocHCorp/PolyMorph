@@ -3,7 +3,7 @@ pub mod scenarios;
 use std::path::Path;
 
 use nalgebra::Matrix3;
-use robomorph::{communications::udp_interface::UdpInterface, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, motion_controller::{MotionController, VehicleKinematicConfig}, motors_mixer::MotorsMixer}}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
+use robomorph::{communications::udp_interface::UdpInterface, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, force_to_attitude_resolver::ForceToAttitudeResolver, motion_controller::{MotionController, VehicleKinematicConfig}, motors_mixer::MotorsMixer, velocity_controller::VelocityController}}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
 use tokio::sync::broadcast::channel;
 use crate::{scenarios::{player::ScenarioPlayer, recorder::Recorder}, vehicle_controllers::{osprai_controller::OspraiController, vehicle_controller::VehicleController}};
 
@@ -15,21 +15,22 @@ See docs/docs/simulation/running-scenarios.mdx.";
 /// Wiring of the simulation binary. Rules this wiring obeys (each learnt from a bug, see
 /// `docs/docs/pipelines/motor-control/lessons.mdx`):
 ///   - every stage of the control loop lives in the SAME processes pipeline (one clock) and is
-///     registered in producer -> consumer order: osprai (publishes the pose) -> scenario player
-///     (publishes the setpoint) -> remote -> attitude -> mixer -> recorder. Two processes pipelines
-///     at the same nominal frequency on two threads drift in phase and produce empty / double ticks
-///     (beat) [P4];
+///     registered in producer -> consumer order: osprai (publishes the pose) -> remote -> scenario
+///     player (the mission setpoint) -> velocity -> resolver -> attitude -> mixer -> recorder. Two
+///     processes pipelines at the same nominal frequency on two threads drift in phase and produce
+///     empty / double ticks (beat) [P4];
 ///   - all stages run at the same frequency (100 Hz): the time-scale separation of the cascade
 ///     lives in the time constants, not in the tick rates. tau_attitude = 0.2 s >= 10 * T;
 ///   - ONE source of setpoints: the scenario player. The bridge only measures and actuates;
-///   - the wrench goes from the attitude stage to the mixer through the scheduler PIPE (the
-///     attitude stage has no wrench sender), which is reliable only because both run in the same
-///     pass; every other link uses a broadcast channel;
+///   - the cascade scenario player -> velocity -> resolver -> attitude -> mixer goes through the
+///     scheduler PIPE: ONE setpoint `Pose`, which each stage enriches (velocity: the force f_d;
+///     resolver: q_d and omega_d), then the wrench. It is reliable only because each producer and
+///     its consumer run in the same pass. Every other link uses a broadcast channel;
 ///   - `VehicleKinematicConfig` holds the TOTAL mass and inertia of the vehicle (base + arms +
 ///     rotors), taken from the SDF; the attitude time constant is a constructor argument of the
 ///     controller, not a field of the vehicle config.
-/// Stabilize mode: the velocity loop (`SpeedController`) is not wired until brick 5; until then the
-/// attitude stage holds the weight with its gravity feedforward.
+/// Stabilize mode: the velocity stage's law is a_d = 0 until brick 5, so its force f_d = (0, 0, m g)
+/// is the weight compensation; the resolver is a stub (q_d = q_pref) until brick 4.
 fn main() {
     // 1. the command line
     let args: Vec<String>= std::env::args().skip(1).collect();
@@ -80,6 +81,8 @@ fn main() {
     let mut remote_controller= XboxPadControl::new("remote_controller".to_string(), 5);
     let mut udp_interface= UdpInterface::new("127.0.0.1", 8080, "127.0.0.1", 8090, 10);
     let mut scenario_player= ScenarioPlayer::new("scenario_player".to_string(), scenario.clone());
+    let mut velocity_controller= VelocityController::new("velocity_controller".to_string(), vehicle_config);
+    let mut resolver= ForceToAttitudeResolver::new("force_to_attitude_resolver".to_string());
     let mut attitude_controller= AttitudeController::new("attitude_controller".to_string(), vehicle_config, 0.2, 1.0);
     let mut motor_mixer= MotorsMixer::new("motor_mixer".to_string(), vehicle_config.clone());
     let mut osprai_controller= OspraiController::default();
@@ -99,6 +102,8 @@ fn main() {
     remote_controller.set_period_from_freq(100);
     osprai_controller.set_period_from_freq(100);
     scenario_player.set_period_from_freq(100);
+    velocity_controller.set_period_from_freq(100);
+    resolver.set_period_from_freq(100);
     attitude_controller.set_period_from_freq(100);
     motor_mixer.set_period_from_freq(100);
     if let Some(recorder)= &mut recorder {
@@ -121,24 +126,27 @@ fn main() {
     osprai_controller.set_motor_config_sender(motor_config_sender.clone());
     osprai_controller.set_motor_feedback_sender(motor_feedback_sender.clone());
     osprai_controller.set_receiver(command_sender.subscribe());
-    //    5b. the scenario player reads the simulated time from the telemetry and publishes the setpoint
+    //    5b. the scenario player reads the simulated time from the telemetry and publishes the mission
+    //        setpoint (attitude preference, desired velocity)
     scenario_player.set_receiver(vehicle_telemetry_sender.subscribe());
     scenario_player.set_setpoint_sender(mc_setpoint_sender.clone());
-    //    5c. the attitude stage reads the pose and the setpoint; its wrench goes to the mixer by the pipe
+    //    5c. the velocity stage and the resolver need no channel: the setpoint comes down the pipe,
+    //        each of them enriches it and hands it on (a_d = 0 until brick 5, stub until brick 4)
+    //    5d. the attitude stage reads the pose; its setpoint comes from the pipe only, and its wrench
+    //        goes to the mixer by the pipe
     attitude_controller.set_receiver(vehicle_telemetry_sender.subscribe());
-    attitude_controller.set_setpoint_receiver(mc_setpoint_sender.subscribe());
-    //    5d. the mixer reads the motor tree and the feedbacks, and publishes the motor commands
+    //    5e. the mixer reads the motor tree and the feedbacks, and publishes the motor commands
     motor_mixer.set_motor_config_receiver(motor_config_sender.subscribe());
     motor_mixer.set_motor_feedback_receiver(motor_feedback_sender.subscribe());
     motor_mixer.set_sender(command_sender.clone());
-    //    5e. the recorder listens to the pose, the setpoint, the commands and the motor feedbacks
+    //    5f. the recorder listens to the pose, the mission setpoint, the commands and the motor feedbacks
     if let Some(recorder)= &mut recorder {
         recorder.set_receiver(vehicle_telemetry_sender.subscribe());
         recorder.set_setpoint_receiver(mc_setpoint_sender.subscribe());
         recorder.set_command_receiver(command_sender.subscribe());
         recorder.set_feedback_receiver(motor_feedback_sender.subscribe());
     }
-    //    5f. the interface is wired like any other Process now that connect_process() is gone.
+    //    5g. the interface is wired like any other Process now that connect_process() is gone.
     //        connect() fails if this receiver is missing.
     udp_interface.set_sender(vehicle_telemetry_sender.clone());
     udp_interface.set_receiver(vehicle_telemetry_sender.subscribe());
@@ -146,13 +154,15 @@ fn main() {
     osprai_controller.start_listening_topics();
 
     // 6. the scheduler. Registration order = execution order within a pass [P4]: osprai first (fresh
-    //    pose), the player before the attitude (setpoint of this pass), the mixer right after the
-    //    attitude (the pipe carries the wrench within the pass), the recorder last (it sees the
-    //    whole pass).
+    //    pose), then the cascade scenario player -> velocity -> resolver -> attitude -> mixer, each
+    //    right after its producer (the pipe carries the setpoint, enriched stage after stage, then the
+    //    wrench, within the pass), the recorder last (it sees the whole pass).
     let mut scheduler = Scheduler::new();
     scheduler.register_process(Box::new(osprai_controller));
-    scheduler.register_process(Box::new(scenario_player));
     scheduler.register_process(Box::new(remote_controller));
+    scheduler.register_process(Box::new(scenario_player));
+    scheduler.register_process(Box::new(velocity_controller));
+    scheduler.register_process(Box::new(resolver));
     scheduler.register_process(Box::new(attitude_controller));
     scheduler.register_process(Box::new(motor_mixer));
     if let Some(recorder)= recorder {

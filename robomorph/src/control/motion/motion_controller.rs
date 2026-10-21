@@ -13,7 +13,7 @@ use tokio::sync::broadcast::Receiver;
 use crate::{control::{motion::motor_controller::{MotorController, working_axis_i32_to_vec3}, pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, MotorStatus, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
 /// Standard gravity (m/s^2). Multiplied by `VehicleKinematicConfig::weight` it gives the
-/// gravity feedforward force `m * g` that the attitude stage asks the mixer to produce.
+/// weight compensation `m * g` that the velocity stage puts into the desired force f_d.
 pub const GRAVITY: f64= 9.81;
 
 /// A stage of the control cascade: something that turns (measurement, setpoint) into the

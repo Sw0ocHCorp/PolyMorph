@@ -29,6 +29,8 @@ mod test_utils_functions {
 }
 
 /// Regression test of `AttitudeController::compute_command_law` on a toy vehicle config.
+/// The setpoint is the `Pose` that comes down the pipe in stabilize: level, no rate, and the force
+/// f_d = (0, 0, m g) world.
 /// Case 1: identity attitude and setpoint -> the wrench is pure weight compensation
 /// (`fz = weight * g = 11.772 N`, no moment). Case 2: the current attitude is rotated by
 /// 30 rad (not degrees) about body x -> the moment and the tilted force are checked against
@@ -42,7 +44,7 @@ use chrono::Utc;
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use prost_types::Timestamp;
 
-use crate::{control::motion::{attitude_controller::AttitudeController, motion_controller::{MotionController, VehicleKinematicConfig}}, core::scheduler::Process, messages::{pose_messages::{IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::motion::{attitude_controller::AttitudeController, motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}}, core::scheduler::Process, messages::{pose_messages::{IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
 use super::*;
 
@@ -70,26 +72,27 @@ use super::*;
         input_pose.imu_measurement= Some(IMUMeasurements {timestamp: Some(now), l_accel: None, 
                                                             a_velocity: Some(Vec3::new(0.0, 0.0, 0.0)), 
                                                             magnetic_field: None });
+        // the setpoint that comes down the pipe in stabilize: level, no rate, and the weight
+        // compensation (0, 0, m g) in the world frame - the force the stage used to compute itself,
+        // so the reference values below are unchanged
         let mut pose_setpoint= Pose::default();
         pose_setpoint.orientation= Some(UnitQuat{w: 1.0, x: 0.0, y: 0.0, z: 0.0});
         pose_setpoint.imu_measurement= Some(IMUMeasurements {timestamp: Some(now), l_accel: None, 
                                                             a_velocity: Some(Vec3::new(0.0, 0.0, 0.0)), 
                                                             magnetic_field: None });
+        pose_setpoint.force= Some(Vec3::new(0.0, 0.0, vehicle_config.weight * GRAVITY));
         println!("Vehicle Moments Matrix:\n{:?}", vehicle_config.moments_matrix);
         println!("Time Constant:\n{:?}", att_controller.get_time_constant());
         let result= att_controller.compute_command_law(Some(AnyMessage::PoseState(input_pose.clone())), 
                                                                     Some(AnyMessage::PoseState(pose_setpoint.clone())), 
                                                                     Duration::from_millis(20), false);
-        if let Some(result_wrench) = result && let AnyMessage::VehicleWrench(wrench)= result_wrench {
-            // cas 1 : identité
-            assert!((wrench.fz - 11.772).abs() < 1e-6);
-            assert!(wrench.mx.abs() < 1e-9 && wrench.mx.is_finite());
-            /*println!("Input Pose= {:?}", input_pose);
-            println!("Pose Setpoint= {:?}", pose_setpoint);
-            println!("Result Wrench= {:?}", result_wrench);*/
-        } else {
-            
-        }
+        // the law must produce a wrench: an abstention (None) fails the test instead of skipping it
+        let Some(AnyMessage::VehicleWrench(wrench))= result else {
+            panic!("case 1: no wrench produced");
+        };
+        // case 1: identity
+        assert!((wrench.fz - 11.772).abs() < 1e-6);
+        assert!(wrench.mx.abs() < 1e-9 && wrench.mx.is_finite());
         input_pose.orientation= Some(UnitQuat::from(UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 30.0)));
         
         input_pose.imu_measurement= Some(IMUMeasurements {timestamp: Some(now), l_accel: None, 
@@ -100,12 +103,11 @@ use super::*;
         let result= att_controller.compute_command_law(Some(AnyMessage::PoseState(input_pose.clone())), 
                                                                     Some(AnyMessage::PoseState(pose_setpoint.clone())), 
                                                                     Duration::from_millis(20), false);
-        if let Some(result_wrench) = result && let AnyMessage::VehicleWrench(wrench)= result_wrench {
-            assert!((wrench.mx - 0.6017687777566212).abs() < 1e-6);
-            assert!((wrench.fy - (-11.631108278821168)).abs() < 1e-6);
-            /*println!("Input Pose= {:?}", input_pose);
-            println!("Pose Setpoint= {:?}", pose_setpoint);
-            println!("Result Wrench= {:?}", result_wrench);*/
-        }
+        let Some(AnyMessage::VehicleWrench(wrench))= result else {
+            panic!("case 2: no wrench produced");
+        };
+        // case 2: rotated by 30 rad about body x
+        assert!((wrench.mx - 0.6017687777566212).abs() < 1e-6);
+        assert!((wrench.fy - (-11.631108278821168)).abs() < 1e-6);
     }
 }
