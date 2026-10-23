@@ -11,7 +11,7 @@ The first robotics pipeline of the stack. It answers one question: **given a des
 <figcaption>Solid arrows: the scheduler pipe, within one pass. Dashed arrows: broadcast channels.</figcaption>
 </figure>
 
-All the processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → scenario_player → velocity → resolver → attitude → mixer → recorder`. That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx). The cascade hands **one** setpoint `Pose` down the pipe, each stage enriching it — the velocity stage adds the force `f_d`, the resolver sets `q_d` and `ω_d` — and the attitude stage turns it into the wrench (see [the setpoint `Pose` down the cascade](../../framework/messages.mdx#the-setpoint-pose-down-the-cascade)). The bridge only measures and actuates; the mission setpoint comes from the scenario player, the single source of setpoints, at the head of the cascade; the recorder (optional) writes one CSV row per pass — see [Running scenarios](../../simulation/running-scenarios.mdx).
+All the processes run in the **same processes pipeline at 100 Hz**, registered in this order: `osprai → remote → scenario_player → velocity → resolver → attitude → mixer → recorder` (on the bench, the resolver is in the cascade only for the scenarios that ask for it). That guarantees one fresh measurement per tick and makes the pipe reliable — see [Conventions](../../framework/conventions.mdx). The cascade hands **one** setpoint `Pose` down the pipe, each stage enriching it — the velocity stage adds the force `f_d`, the resolver sets `q_d` and `ω_d` — and the attitude stage turns it into the wrench (see [the setpoint `Pose` down the cascade](../../framework/messages.mdx#the-setpoint-pose-down-the-cascade)). The bridge only measures and actuates; the mission setpoint comes from the scenario player, the single source of setpoints, at the head of the cascade; the recorder (optional) writes one CSV row per pass — see [Running scenarios](../../simulation/running-scenarios.mdx).
 
 ## Stage contracts
 
@@ -33,7 +33,7 @@ The **wrench** is the contract that makes each side replaceable: the mixer does 
 | Velocity stage | in place, law `a_d = 0` (stabilize): it supplies the weight compensation `f_d = (0, 0, m·g)` |
 | Control allocation over an arbitrary motor tree | built, validated on the OSPRAI |
 | Velocity loop | brick 5: its law (a PI on the velocity, with the generic `PIDController<Vec3>`) replaces `a_d = 0` in the velocity stage |
-| Force → attitude resolver | [specified](resolver.mdx); a stub (`q_d = q_pref`) since brick 3, the alignment comes with brick 4 |
+| Force → attitude resolver | [built](resolver.mdx) for aerial vehicles: `S` from the motor tree, alignment for k = 1, 2, 3; ground vehicles and the tilt limit pending |
 | Position loop | [planned](roadmap.mdx) |
 | Arming / spool-up sequencing, failsafe, data-age supervision | not started — belongs to a supervisor |
 

@@ -10,11 +10,11 @@
 use std::{collections::HashMap, time::Duration};
 
 use chrono::Utc;
-use nalgebra::{DVector, Matrix3, Matrix6xX, UnitQuaternion, Vector3, Vector6};
+use nalgebra::{DVector, Matrix3, Matrix6xX, Vector6};
 use prost_types::Timestamp;
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_controller::{MotorController, working_axis_i32_to_vec3}}}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_controller::MotorController, motor_tree::{motor_transforms, parents_first_order, receive_motors}}}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, Vec3}}};
 
 /// The control-allocation stage: turns one 6D wrench setpoint into one command per motor.
 ///
@@ -52,12 +52,7 @@ impl Process for MotorsMixer {
     fn exec(&mut self, input: &Option<AnyMessage>, dt: std::time::Duration) -> Option<AnyMessage> {
         //get the motors being controlled by the mixer
         if let Some(motor_config_rcvr)= &mut self.motor_config_receiver  {
-            let sz= motor_config_rcvr.len();
-            for _ in 0..sz {
-                if let Ok(motor_controller)= motor_config_rcvr.try_recv() {
-                    self.motors.insert(motor_controller.get_motor_model().id, motor_controller);
-                }
-            }
+            receive_motors(motor_config_rcvr, &mut self.motors);
         }
         //get the current
         if let Some(feedbacks_rcvr)= &mut self.motor_feedback_receiver {
@@ -265,30 +260,9 @@ impl MotionController for MotorsMixer {
         let mut motors_wrench_map= HashMap::new();
         // the global wrench of the wehicle. Used in the STEP#3 (sum of the root motors wrenches)
         let mut current_global_work= WorkVec::default();
-        // order the motors so a parent is always processed before its children (depth ascending).
-        // depth is the length of the parent_id chain up to a root (parent_id == 0), so the order stays
-        // correct whatever the HashMap iteration order. Forward = root->leaves (STEP#1), reversed = leaves->root (STEP#2).
-        // 1. every motor id, in whatever order the HashMap gives them (randomised per map)
-        let mut processing_order: Vec<u32>= self.motors.keys().copied().collect();
-        // 2. sort by a key computed for each id: the function passed to sort_by_key(...) takes an id
-        //    and returns its sorting key, here (depth, id)
-        processing_order.sort_by_key(|id| {
-            // 2a. depth: walk up the parent_id chain until a root, counting the steps
-            let mut depth= 0usize;
-            let mut current= *id;
-            while let Some(mc)= self.motors.get(&current) {
-                if mc.get_motor_model().parent_id == 0 { break; }
-                current= mc.get_motor_model().parent_id;
-                depth += 1;
-                if depth > self.motors.len() { break; } // guard against a malformed cyclic chain
-            }
-            // 2b. the key: depth first (parents before children), then id. Without the id, motors of
-            //     equal depth (here the two arms, then the two rotors) would follow the HashMap
-            //     iteration order, which is randomised per map: two identical mixers fed the same
-            //     data would sweep their motors in different orders in STEP#3 and allocate slightly
-            //     differently - an allocation that cannot be reproduced from one run to the next.
-            (depth, *id)
-        });
+        // the motors ordered parents first (depth ascending, ties broken by id): see
+        // motor_tree::parents_first_order
+        let processing_order= parents_first_order(&self.motors);
             
         //STEP#1:
         //      Compute the current motor transform based on the potential parent motor, for each motor (parents first)
@@ -544,109 +518,11 @@ impl MotorsMixer {
         self.motor_feedback_receiver= Some(motor_feedback_receiver);
     }
 
-    /// Resolve every motor's absolute transform in the body frame.
-    /// `motor_ids` MUST be ordered parents-first (depth ascending): a child's transform is expressed
-    /// relative to its parent's, so the parent must already be in the map when the child is processed.
-    /// Resolve every motor's absolute transform in the BODY frame, by walking the kinematic chain.
-    /// `motor_ids` MUST be ordered parents first: a child's pose is expressed relative to its parent's.
-    ///
-    /// Notation:      R_j = orientation of motor j in the body frame       (quaternion)
-    ///                p_j = position    of motor j in the body frame       (vector)
-    ///                R_j^rel, p_j^rel  = pose of j at rest, in its PARENT's frame  (from the model)
-    ///                theta_j           = current angle of j, 0 if j is not an angular joint
-    ///                e_j               = j's own working axis, in its own frame
-    ///
-    /// FORMULAS
-    ///     orientation:   R_j = R_parent * R_j^rel * Rot(e_j, theta_j)
-    ///     position:      p_j = p_parent + R_parent * p_j^rel
-    ///
-    /// Two points that are easy to get wrong:
-    ///   - the joint angle is composed on the RIGHT of R_j^rel, because theta_j is a rotation about
-    ///     the joint's OWN axis, expressed in its own frame, not in the parent's.
-    ///   - p_j^rel is expressed in the PARENT's frame, so it is rotated by R_parent, never by R_j.
-    ///
-    /// Note that Rot(e_j, theta_j) leaves e_j itself unchanged, so the joint axis seen in the body
-    /// frame is R_parent * R_j^rel * e_j: it does not depend on the joint's own angle. That is why
-    /// `compute_motor_efforts` can read the rotation axis straight from R_j.
-    ///
-    /// For a root motor (parent_id == 0) the parent is the vehicle itself:
-    ///     R_j = R_j^rel * Rot(e_j, theta_j)          p_j = p_j^rel - p_com
-    /// the CoM offset being what makes every lever arm below be taken about the reduction point:
-    /// p_j^rel is measured from the vehicle origin, p_com is the CoM measured from that same origin,
-    /// so the vector from the CoM to the motor is their difference.
+    /// Every motor's transform in the body frame at the CURRENT joint angles (their measured
+    /// feedbacks), positions taken about the CoM: see `motor_tree::motor_transforms`.
     fn compute_motor_transforms(&self, motor_ids : &Vec<u32>) -> HashMap<u32, Transform> {
-        let mut motor_transforms: HashMap<u32, Transform>= HashMap::new();
-        for motor_id in motor_ids {
-            let Some(motor_controller)= self.motors.get(motor_id) else {
-                continue
-            };
-            let motor_model= motor_controller.get_motor_model();
-            // IF the parent transform has already been computed
-            if let Some(parent_transform) = motor_transforms.get(&motor_model.parent_id) {
-                let mut motor_transform= parent_transform.clone();
-                // ORIENTATION      R_j = R_parent * R_j^rel * Rot(e_j, theta_j)
-                if let Some(m_orientation)= motor_model.relative_orientation {
-                    // R_j^rel : rest orientation of j, in its parent's frame
-                    let mut motor_orientation= UnitQuaternion::from(m_orientation);
-                    if motor_model.working_axis <= WorkingAxis::RotatingAroundZ as i32 {
-                        // R_j^rel * Rot(e_j, theta_j) : an angular joint adds its current angle about its
-                        // own axis. Composed on the RIGHT because e_j is expressed in j's frame.
-                        motor_orientation *= UnitQuaternion::from_axis_angle(&working_axis_i32_to_vec3(motor_model.working_axis), motor_controller.get_motor_feedback().current_value);
-                    }
-                    // R_parent : parent orientation in the body frame, already resolved
-                    let parent_orientation= UnitQuaternion::from(parent_transform.orientation);
-                    // R_j = R_parent * ( R_j^rel * Rot(e_j, theta_j) )
-                    motor_transform.orientation= UnitQuat::from(parent_orientation * motor_orientation);
-                }
-                // POSITION         p_j = p_parent + R_parent * p_j^rel
-                if let Some(m_location)= motor_model.relative_location {
-                    // p_j^rel : position of j relative to its parent, in the PARENT's frame
-                    let mut motor_location= Vector3::from(m_location);
-                    // R_parent : rotates p_j^rel from the parent's frame into the body frame.
-                    // The parent's orientation, never the child's: p_j^rel is expressed in the parent.
-                    let parent_orientation= UnitQuaternion::from(parent_transform.orientation);
-                    // p_parent : parent position in the body frame, already resolved
-                    let parent_location=    Vector3::from(parent_transform.location);
-                    // p_j = p_parent + R_parent * p_j^rel
-                    motor_location= parent_location + parent_orientation * motor_location;
-                    motor_transform.location= Vec3::from(motor_location);
-                }
-                motor_transforms.insert(*motor_id, motor_transform);
-            }
-            //ELSE IF the motor is the first motor of the kinematic chain
-            else if motor_model.parent_id == 0 {
-                let mut motor_location= Vec3::default();
-                let mut motor_orientation= UnitQuaternion::identity();
-                // ROOT MOTOR: the "parent" is the vehicle itself, so R_parent = identity and the
-                //             positions are re-based on the CoM, the reduction point every lever
-                //             arm is taken about.
-                // POSITION         p_j = p_j^rel - p_com
-                if let Some(m_location)= motor_model.relative_location {
-                    // p_j^rel : position of the root motor, given relative to the vehicle origin
-                    motor_location= m_location;
-                    // - p_com : p_com is the CoM seen from the origin, so (motor - CoM) is the vector
-                    //           from the CoM to the motor: p x f below is then the moment about the
-                    //           CoM, not about the vehicle origin. (It was `+= p_com` until bug #11,
-                    //           harmless only while p_com was 0.)
-                    motor_location -= self.vehicle_config.com_relative_location;
-                }
-                // ORIENTATION      R_j = R_j^rel * Rot(e_j, theta_j)
-                if let Some(m_orientation)= motor_model.relative_orientation {
-                    // R_j^rel : rest orientation of the root motor in the body frame
-                    motor_orientation= UnitQuaternion::from(m_orientation);
-                }
-                // * Rot(e_j, theta_j) : same as above, an angular joint adds its current angle
-                if motor_model.working_axis <= WorkingAxis::RotatingAroundZ as i32 {
-                    motor_orientation *= UnitQuaternion::from_axis_angle(&working_axis_i32_to_vec3(motor_model.working_axis), motor_controller.get_motor_feedback().current_value);
-                }
-                motor_transforms.insert(*motor_id, Transform {location: motor_location, orientation: UnitQuat::from(motor_orientation)});
-            }
-            // a non-root motor whose parent is not resolved yet means motor_ids is not parents-first
-            else {
-                println!("[ERROR] -> Motor#{} has a parent (Motor#{}) but it's transform is not computed", motor_id, motor_model.parent_id);
-            }
-        }
-        return motor_transforms;
+        return motor_transforms(&self.motors, motor_ids, self.vehicle_config.com_relative_location,
+                                |motor_controller| motor_controller.get_motor_feedback().current_value);
     }
 
     /// Insert or replace a motor in the table by id (alternative to the configuration channel).
@@ -686,6 +562,10 @@ impl MotorsMixer {
 /// Seen red with the former `+= p_com`, which put both motors at z = 0.1167.
 #[cfg(test)]
 mod tests {
+    use nalgebra::{UnitQuaternion, Vector3};
+
+    use crate::messages::registered_message::UnitQuat;
+
     use super::*;
 
     #[test]

@@ -22,7 +22,7 @@ pub mod recorder;
 pub mod report;
 
 /// Names accepted by `by_name`, for the command-line help.
-pub const NAMES: [&str; 2]= ["hover", "roll_step"];
+pub const NAMES: [&str; 3]= ["hover", "roll_step", "roll_refused"];
 
 /// One piece of a timeline: from `start_s` on, the setpoint is constant. Timelines are piecewise
 /// constant (steps only), which is exactly what a step response needs.
@@ -65,11 +65,26 @@ pub struct EdgePrediction {
     pub overshoot: f64,
 }
 
+/// Which stages the setpoint goes through between the scenario player and the attitude stage. A
+/// choice of the BENCH, made per scenario: the stages themselves know nothing about it, any process
+/// may stand before the attitude stage as long as it fills the fields it reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cascade {
+    /// player -> velocity -> attitude: the mission's attitude preference is tracked as it is. Tests
+    /// the attitude stage alone.
+    AttitudeOnly,
+    /// player -> velocity -> force -> attitude resolver -> attitude: the attitude tracked is the one
+    /// that makes the desired force producible, the closest to the preference.
+    WithResolver,
+}
+
 /// A timeline of setpoints and the checks of its report.
 #[derive(Clone, Debug)]
 pub struct Scenario {
     pub name: &'static str,
     pub description: &'static str,
+    /// The stages the setpoint goes through (see `Cascade`).
+    pub cascade: Cascade,
     /// Sorted by `start_s`, the first one starting at 0.
     pub segments: Vec<Segment>,
     /// End of the scripted part (s). `None`: the timeline is held forever.
@@ -117,6 +132,7 @@ pub fn by_name(name: &str) -> Option<Scenario> {
         "hover" => Some(Scenario {
             name: "hover",
             description: "S0: hold level, forever",
+            cascade: Cascade::AttitudeOnly,
             segments: vec![Segment { start_s: 0.0, orientation: level, velocity: Vector3::zeros() }],
             duration_s: None,
             checks: vec![hover_tilt(f64::INFINITY)],
@@ -141,6 +157,8 @@ pub fn by_name(name: &str) -> Option<Scenario> {
         "roll_step" => Some(Scenario {
             name: "roll_step",
             description: "S1: roll step of +10 deg at 3 s, back to level at 6 s",
+            // the attitude stage alone: through the resolver the roll would be refused (see S2)
+            cascade: Cascade::AttitudeOnly,
             segments: vec![
                 Segment { start_s: 0.0, orientation: level,  velocity: Vector3::zeros() },
                 Segment { start_s: 3.0, orientation: rolled, velocity: Vector3::zeros() },
@@ -155,6 +173,21 @@ pub fn by_name(name: &str) -> Option<Scenario> {
                     EdgePrediction { fractions: [0.442, 1.026, 1.347], overshoot: 0.555 },
                 ]},
             ],
+        }),
+        // S2: S1 itself (same timeline, same duration), through the force -> attitude resolver, with
+        //     its own check. The force stays the weight,
+        //     vertical, and the OSPRAI can only push in its body xz plane: rolled by 10 deg, that plane
+        //     no longer contains the vertical. The resolver turns the preference back by the smallest
+        //     rotation that makes the force producible, -10 deg about x: q_d stays level, the roll is
+        //     REFUSED. Prediction: the vehicle stays level all along, the S0 tilt check from 1 s to the
+        //     end, while the mission asks for 10 deg between 3 and 6 s (resolver unit test
+        //     `the_osprai_serves_in_plane_forces_and_refuses_the_roll`).
+        "roll_refused" => by_name("roll_step").map(|s1| Scenario {
+            name: "roll_refused",
+            description: "S2: roll preference of +10 deg at 3 s, back to level at 6 s, through the resolver: refused",
+            cascade: Cascade::WithResolver,
+            checks: vec![hover_tilt(9.0)],
+            ..s1
         }),
         _ => None,
     }
@@ -192,6 +225,15 @@ mod tests {
         assert!(!scenario.is_finished(8.99) && scenario.is_finished(9.0));
         // 4. the velocity setpoint is zero and present (Some), never missing
         assert_eq!(scenario.setpoint_at(4.0).l_velocity.map(|v| v.norm()), Some(0.0));
+    }
+
+    #[test]
+    fn roll_refused_replays_roll_step_through_the_resolver() {
+        // the timeline of S1 by construction: what differs is the resolver, and a check of the tilt
+        // over the whole scenario (the roll is expected to be refused)
+        let (s1, s2)= (by_name("roll_step").unwrap(), by_name("roll_refused").unwrap());
+        assert_eq!((s1.cascade, s2.cascade), (Cascade::AttitudeOnly, Cascade::WithResolver));
+        assert!(matches!(s2.checks.as_slice(), [Check::HoverTilt { from_s, to_s, .. }] if *from_s == 1.0 && *to_s == 9.0));
     }
 
     #[test]

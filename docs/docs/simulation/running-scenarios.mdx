@@ -48,7 +48,7 @@ cargo run --release -- report runs/roll_step_1.csv
 
 The recorder **refuses an existing file**: it never overwrites a run (nor a log). Give every run a new name. `runs/` is ignored by git.
 
-Without `--scenario`, the controller plays `hover`; without `--record`, nothing is recorded.
+Without `--scenario`, the controller plays `hover`; without `--record`, nothing is recorded. The console line `[SCENARIO] … ready` gives the cascade of the scenario.
 
 ## The catalogue
 
@@ -56,6 +56,22 @@ Without `--scenario`, the controller plays `hover`; without `--record`, nothing 
 |---|---|---|---|
 | S0 | `hover` (default) | level, forever | tilt ≤ 0.5° from 1 s on |
 | S1 | `roll_step` | level from 0 to 3 s, roll +10° at 3 s, level again at 6 s, end at 9 s | the S0 tilt check on [1 s, 3 s]; the roll at the end of the hold (5.99 s); the two edges shown for information: fraction of the step covered at τ, 2τ, 3τ, and the overshoot |
+| S2 | `roll_refused` | the timeline of S1, **through the force → attitude resolver** | tilt ≤ 0.5° from 1 s to the end: the roll preference is refused |
+
+**One cascade per scenario.** The stages between the player and the attitude stage are a choice of the bench (`Scenario::cascade`), not of the control stack: any process may stand before the attitude stage, as long as it fills the fields that stage reads.
+- `AttitudeOnly`: player → velocity → attitude. The mission's attitude preference is tracked as it is. `hover` and `roll_step` test the attitude stage alone this way.
+- `WithResolver`: player → velocity → resolver → attitude. The attitude tracked is the one that makes the desired force producible, the closest to the preference.
+
+**Why S2 must stay level.** The force is the weight, vertical, and the OSPRAI can only push in its body xz plane. Rolled by 10°, that plane no longer contains the vertical. So the resolver turns the preference back by −10° about x, the smallest rotation that makes the force producible: `q_d` stays level while the mission asks for 10° ([the resolver](../pipelines/motor-control/resolver.mdx)). A roll that **does** happen in S2 would mean the resolver is not in the cascade, or gets `S` wrong.
+
+**Runs 7 and 8 (brick 4).** Same timeline, the two cascades:
+
+| Run | Cascade | Mission | Measured | Verdict |
+|---|---|---|---|---|
+| 7, `roll_step` | `AttitudeOnly` | 10° of roll from 3 to 6 s | held roll 6.40° (as run 3), lateral drift −11.9 m at 9 s | PASS |
+| 8, `roll_refused` | `WithResolver` | 10° of roll from 3 to 6 s | tilt ≤ 0.005° from 1 to 9 s, lateral drift +1 cm | PASS |
+
+The resolver refused the roll: the vehicle stayed level, and since it never tilted, it never slid either.
 
 The 1 s margin of the tilt check covers the start-up: at Play the rotors spin up from their minimum thrust, and the vehicle drops a few centimetres. The tilt is measured from `q` itself: the angle between the body z axis and the world z axis.
 

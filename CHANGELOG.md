@@ -31,6 +31,58 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 ## [Unreleased]
 
 ---
+### 2026-10-23 — Force to attitude resolver implemented
+
+#### Added
+- `ForceToAttitudeResolver`:
+  + `set_motor_config_receiver(...)`: reads the motor tree on the configuration channel (the same one as the mixer), to know the motors it resolves for
+- `main.rs`:
+  + the resolver is added to the processes pipeline only when the scenario's cascade includes it
+- `ForceSubspace` (`S`):
+  + an enum (`Empty`, `Line`, `Plane`, `Space`) that represents the forces the vehicle can produce, given its motor architecture: the thrust directions of its thrusters and the rotation axes of the joints above them
+- `force_to_attitude_resolver.rs`:
+  + `reachable_force_subspace(...)`:
+      computes S, the subspace of body-frame forces the motors can produce, from the motor tree AT REST
+      (every joint angle at 0).
+      For doing that, it takes each thruster's thrust direction and, for each joint above it, the
+      direction that joint can swing the thrust towards.
+      The Gram matrix of these directions gives how many independent directions the vehicle can push in, and which ones.
+  + `align(...)`:
+      returns the attitude closest to the mission's target attitude that allows the vehicle to produce the force setpoint
+  + `perpendicular_axis(...)`:
+      backup rotation axis for `align(...)` when the force lies exactly along the direction the motors
+      push in, taken from the vehicle's own x axis (y if x is along the force).
+      In that case the usual formula gives no axis: this one decides which way the vehicle turns
+- `motor_tree.rs`:
+    the file that contains all the tools to manipulate the motor tree (in `HashMap<u32, MotorController>` form)
+  + `receive_motors(...)`:
+      absorbs the motor descriptions waiting on the configuration channel, without blocking;
+      returns whether any arrived
+  + `parents_first_order(...)`:
+      the motor ids, parents first (ties broken by id, so the order is reproducible)
+  + `motor_transforms(...)`:
+      each motor's pose (location and orientation) in the body frame, for the joint angles given by
+      the caller: measured for the mixer, 0 (at rest) for the resolver
+- `scenarios/mod.rs`:
+  + `Cascade`:
+    * an enum, one per scenario (`Scenario::cascade`), that selects whether the processes pipeline uses the `ForceToAttitudeResolver`
+  + scenario `roll_refused`:
+    * `roll_step`'s timeline through the `ForceToAttitudeResolver`: the resolver refuses the roll, so that the drone can keep producing the vertical force the scenario asks for. Unlike `roll_step` (attitude stage only), which tracks the target roll without checking that the force can still be produced. Check: tilt ≤ 0.5° from 1 s to 9 s
+
+#### Changed
+- `MotorsMixer`:
+  + `compute_motor_transforms(...)` now calls `motor_transforms(...)`, moved to `motor_tree.rs` with the parents-first sort (behavior unchanged)
+- `ForceToAttitudeResolver`:
+  + `new(...)` takes `vehicle_config`: the vehicle's mass sets the minimum usable force (below 0.1 % of the weight, the last attitude is held)
+  + the stub (q_d = q_pref) is replaced by the real control law: q_d = align(q_pref, f_d, S).
+    Without a motor tree, a force or a preference, the stage abstains
+- Docs: `resolver.mdx` (status, the moment-balance limit, validation), `running-scenarios.mdx` (`roll_refused`, one cascade per scenario, runs 7 to 10), `overview.mdx` and its diagram, `lessons.mdx`, `motor-model.mdx`
+
+#### Known issues
+- `ForceSubspace` (`S`) only looks at forces, not at the moment balance: the OSPRAI cannot hold a pitch in steady state
+  (its rotors are above the CoM, `My = h·Fx`). Documented in `resolver.mdx`
+- Not implemented yet: authority axes and bidirectional thrusters (ground vehicles), tilt limit (brick 5)
+
 
 ### 2026-10-20 — All motion control pipeline processes linked
 
@@ -64,7 +116,6 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
       `force_to_attitude_resolver`        -> (same pose setpoint: target attitude)          -> `attitude_controller`
       `attitude_controller`               -> (vehicle target wrench)                        -> `motors_mixer`
       `motors_mixer`                      -> (one command per motor)                        -> `osprai_controller`
-      
 
 #### Removed
 - `SpeedController`:

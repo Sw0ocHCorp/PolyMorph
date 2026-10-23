@@ -32,7 +32,7 @@
   <text x="270" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">+ f_d (a_d = 0)</text>
   <rect x="370" y="226" width="130" height="52" rx="6" fill="currentColor" fill-opacity="0.06" stroke="#8b7cd8" stroke-width="1.2"/>
   <text x="435" y="248" text-anchor="middle" font-size="11" font-weight="600">Resolver</text>
-  <text x="435" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">q_d, ω_d (stub)</text>
+  <text x="435" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">q_d, ω_d (per scenario)</text>
   <line x1="210" y1="146" x2="259" y2="146" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#p-arw)"/>
   <text x="234" y="136" text-anchor="middle" font-size="9.5" opacity="0.8">Pose</text>
   <line x1="435" y1="146" x2="484" y2="146" stroke="#4a90d9" stroke-width="1.7" marker-end="url(#p-arw-b)"/>

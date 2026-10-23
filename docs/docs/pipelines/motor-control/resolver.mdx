@@ -4,7 +4,16 @@ import Diagram1 from './img/resolver.svg';
 
 The stage between the velocity loop and the attitude loop. It answers one question: **which attitude must the vehicle take so that the force it is asked for becomes producible?** — and it answers it for any vehicle, from the data that describes it.
 
-> **Status.** Since brick 3 the stage is in place, reading and filling its final fields of the setpoint `Pose`, as a **stub**: `q_d = q_pref`, `ω_d = 0`, `f_d` unchanged (`robomorph/src/control/motion/force_to_attitude_resolver.rs`). In stabilize this is already the exact answer, since `f_d = (0, 0, m·g)` is producible at the preferred, level attitude. The alignment described below comes with brick 4.
+> **Status (brick 4).** Implemented for aerial vehicles (`robomorph/src/control/motion/force_to_attitude_resolver.rs`):
+> - `S`, `k` and `v` are derived from the motor tree;
+> - the alignment covers k = 1, 2 and 3, with the guards against degenerate forces;
+> - `ω_d = 0`.
+>
+> Not yet implemented:
+> - the restriction to the authority axes and the forward / reverse choice of bidirectional thrusters (ground vehicles, no bench to validate them on);
+> - the tilt limit, which comes with the velocity loop, when lateral forces exist.
+>
+> Known limit: `S` only looks at **forces**, see [the moment balance](#a-limit-the-moment-balance-is-not-in-s).
 
 ## Contract
 
@@ -29,7 +38,7 @@ A rotation has three degrees of freedom. The resolver consumes exactly as many a
 | 2 | a plane with unit normal `n` | `n ⟂ f_d` | 1 | 2 |
 | 1 | a line along unit vector `t` | `t ∥ f_d` | 2 | 1 (rotation about `f_d`) |
 
-A holonomic ground vehicle (`S` = the horizontal plane, authority about z only) consumes nothing: its heading is entirely free. A differential-drive rover (`S` = its x axis, one authority axis) consumes its only degree of freedom: its heading is dictated by the force. A multirotor keeps yaw. The OSPRAI, whose arms tilt, has `S` = its xz plane and keeps **two** free degrees of freedom — the concrete payoff of the tilting arms, and it falls out of the count without any vehicle-specific code.
+A holonomic ground vehicle (`S` = the horizontal plane, authority about z only) consumes nothing: its heading is entirely free. A differential-drive rover (`S` = its x axis, one authority axis) consumes its only degree of freedom: its heading is dictated by the force. A multirotor keeps yaw. The OSPRAI, whose arms tilt, has `S` = its xz plane and keeps **two** free degrees of freedom **as far as forces go** — the concrete payoff of the tilting arms, and it falls out of the count without any vehicle-specific code. In steady state only one of them, yaw, is really free: see [the moment balance](#a-limit-the-moment-balance-is-not-in-s).
 
 ## The alignment: one formula for k = 1 and k = 2
 
@@ -77,7 +86,7 @@ When the thrusters along `t` can push both ways (`min_value < 0` — wheels), `�
 | `‖f_d‖ → 0` | `f̂_d` undefined | if `‖f_d‖ < ε·m·g`, keep the **last valid** `q_d` (the resolver's only state). Free fall is never a valid demand for an aerial vehicle; for a ground vehicle, a stopped vehicle simply keeps its heading |
 | `v_w ∥ f̂_d`, `k = 1`, same direction | `u` undefined, `γ = 0` | already aligned: `q_align = identity` |
 | `v_w ∥ f̂_d`, `k = 1`, opposite | `γ = π`, any axis works | pick the preference's x axis as `u` — only happens inverted |
-| `v_w ∥ f̂_d`, `k = 2` | the plane's normal points along the force | a 90° rotation is needed about any axis ⟂ `f̂_d`; pick the one in the plane closest to the current attitude — practically unreachable |
+| `v_w ∥ f̂_d`, `k = 2` | the plane's normal points along the force | a 90° rotation is needed about any axis ⟂ `f̂_d`; the implementation takes the preference's x axis projected ⟂ `f̂_d` (its y axis if x lies along `f̂_d`) — practically unreachable |
 | tilt beyond what is safe | `γ − γ*` too large | optional **tilt limit**, a vehicle-level scalar with a sane default (~35°): scale down the component of `f_d` perpendicular to the vertical until the required rotation fits. Never scale the vertical component first — keeping altitude outranks lateral acceleration |
 | `‖f_d‖` beyond the thrusters' capability | the mixer saturates | the velocity loop must saturate its own output (every stage saturates to what the next can serve); `T_max` is computable from the thrusters' `max_value` along `S`. Saturation here must be reported upstream for conditional integration |
 
@@ -85,10 +94,22 @@ When the thrusters along `t` can push both ways (`min_value < 0` — wheels), `�
 
 Never from a per-vehicle flag. Both are derived **once, at start-up, from the motor tree** — the same configuration channel the mixer subscribes to:
 
-- **`S`, the reachable force subspace.** For each thruster, take its rest thrust direction `fhat`. If it has no joint ancestor, it contributes the line `span{fhat}`. If it hangs under a joint of axis `a`, it can be swept about that axis and contributes the plane `span{fhat, a × fhat}` (assuming a useful range — the OSPRAI arms cover ±90°). `S` is the span of all contributions, orthonormalised (Gram–Schmidt or an SVD); `k` is its rank, and its characteristic vector is its direction (`k = 1`) or its normal (`k = 2`).
-- **`𝒜`, the authority axes.** The body axes on which some motor has a *structurally* non-zero moment. Evaluate the effectiveness columns at a **nominal** thrust (hover: `m·g / n_thrusters`), not at zero — joint columns vanish at zero thrust and would hide their authority — and take the support of the moment rows.
+- **`S`, the reachable force subspace.** For each thruster, take its rest thrust direction `fhat`. If it has no joint ancestor, it contributes the line `span{fhat}`. If it hangs under a joint of axis `a`, it can be swept about that axis and contributes the plane `span{fhat, a × fhat}` (assuming a useful range — the OSPRAI arms cover ±90°). `S` is the span of all contributions; `k` is its rank, and its characteristic vector is its direction (`k = 1`, oriented like the thrust) or its normal (`k = 2`). The implementation takes the eigen-decomposition of the Gram matrix `Σ d·dᵀ` of the contributions: `k` eigenvalues are not negligible, and their eigenvectors span `S`. The thrust directions and joint axes are read from the tree **at rest** (every joint angle at 0), with the same transform resolution as the mixer (`motor_tree.rs`).
+- **`𝒜`, the authority axes** (not derived yet: every aerial vehicle has full authority). The body axes on which some motor has a *structurally* non-zero moment. Evaluate the effectiveness columns at a **nominal** thrust (hover: `m·g / n_thrusters`), not at zero — joint columns vanish at zero thrust and would hide their authority — and take the support of the moment rows.
 
 For the OSPRAI this yields `S` = the body xz plane (`k = 2`, `v = ŷ`) and full authority; for a quadrotor `S` = the z axis (`k = 1`, `v = ẑ`); for a differential rover `S` = the x axis with `𝒜 = {z}`. Same code, three vehicles.
+
+## A limit: the moment balance is not in `S`
+
+`S` says which **forces** the thrusters can produce. It says nothing about whether the attitude can be **held** while producing them: that is a question of moments.
+
+The OSPRAI shows the difference.
+- **The geometry.** Its rotors are `h` = 8.3 cm above the CoM, on two arms that tilt about y.
+- **A pitched preference.** Pitched by 10° with a vertical force, the force is in `S`, so the resolver keeps the preference. But a vertical thrust applied above the CoM of a pitched body has a moment about y, `−h·m·g·sin(10°) ≈ −0.17 N·m`, which pulls it back to level like a pendulum.
+- **The only counter-moment.** A pitch moment can only come from tilting both arms the same way. That also tilts the thrust, so it produces a force along x: `My = h·Fx`, the two are tied.
+- **Hence.** In steady state, the OSPRAI cannot hold a pitch without accelerating along x. Of its "two" free degrees of freedom, only **yaw** is free; pitch is a compromise the mixer settles by least squares. The steady pitch error of about 0.3° seen on the bench while a roll is held is the same coupling.
+
+A complete treatment would derive, from the motor tree, the reachable **wrench** subspace (forces and moments together), and accept only attitudes whose holding moment is reachable as well. Not done yet; until then, a pitch preference for the OSPRAI is not a reliable demand.
 
 ## What the attitude stage receives
 
@@ -106,24 +127,29 @@ The attitude stage rotates the force into the body frame and assembles the wrenc
 
 ## Validation
 
-The stage is almost stateless, so its ladder starts with pure unit tests (rung A), each with a value predicted by hand:
+The stage is almost stateless, so its ladder starts with pure unit tests (rung A), each with a value predicted by hand. They are the tests of `force_to_attitude_resolver.rs`; the derivation of `S` is tested on the same three vehicles (quadrotor: `k = 1`, `v = ẑ`; OSPRAI: `k = 2`, `v = ±ŷ`; thrusters along x, y and z: `k = 3`).
 
 | Case (`k = 1`, `t = ẑ`) | Expected |
 |---|---|
 | `f_d = (0, 0, m·g)`, `q_pref` = identity | `q_d` = identity |
 | same `f_d`, `q_pref` = 30° yaw | `q_d` = 30° yaw — yaw is free |
-| `f_d = (m·g·tan 20°, 0, m·g)`, `q_pref` = identity | a 20° pitch about y, sign per the convention test |
+| `f_d = (m·g·tan 20°, 0, m·g)`, `q_pref` = identity | a **+20°** rotation about y: it takes body z towards +x |
 | `f_d = (0, m·g·tan 20°, m·g)`, `q_pref` = 90° yaw | 20° of tilt, heading still 90° |
 | `‖f_d‖ = 0` | previous `q_d` held, no `NaN` |
 
 | Case (`k = 2`, `v = ŷ`, the OSPRAI) | Expected |
 |---|---|
 | `f_d = (f_x, 0, f_z)`, any `q_pref` level | `q_d = q_pref` — in-plane, the arms will serve `f_x` |
-| `f_d = (0, f_y, f_z)` | a pure roll of `atan2(f_y, f_z)` |
+| `f_d = (0, f_y, f_z)` | a pure roll of **−**`atan2(f_y, f_z)` about x: body z goes to `(0, sin r, cos r)` |
+| `f_d = (0, 0, m·g)`, `q_pref` = 10° roll | **level**: the roll is refused, the vertical force is producible only with body y horizontal |
 
-| Case (rover, `S = x̂`, `𝒜 = {z}`) | Expected |
+| Case (`k = 3`, thrusters along x, y and z) | Expected |
+|---|---|
+| any `f_d`, `q_pref` = 10° roll | `q_d = q_pref`: every force is producible |
+
+| Case (rover, `S = x̂`, `𝒜 = {z}`) — not implemented yet | Expected |
 |---|---|
 | `f_d = (1, 1, m·g)` | heading 45°, the vertical part ignored |
 | `f_d = (−1, 0, m·g)`, current heading 0, bidirectional wheels | heading kept at 0, reverse chosen |
 
-Rung B (open loop, Gazebo): command a lateral `f_d` by hand, log `q_d`, and check the tilt sign against the direction the vehicle actually moves once the loop is closed. Rung D (closed loop): a lateral velocity step — the vehicle tilts by `atan(a_d/g)`, accelerates, and the velocity loop's integrator settles the residual; `‖e_R‖(t)` of the attitude stage must still follow its own `(τ, ζ)`.
+Rung B (Gazebo): the scenario `roll_refused` asks for a 10° roll with the weight as the only force; through the resolver the vehicle must stay level (see [running scenarios](../../simulation/running-scenarios.mdx)). A lateral `f_d` will come with the velocity loop: then check the tilt sign against the direction the vehicle actually moves. Rung D (closed loop): a lateral velocity step — the vehicle tilts by `atan(a_d/g)`, accelerates, and the velocity loop's integrator settles the residual; `‖e_R‖(t)` of the attitude stage must still follow its own `(τ, ζ)`.
