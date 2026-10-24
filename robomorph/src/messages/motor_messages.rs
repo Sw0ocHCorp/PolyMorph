@@ -1,7 +1,10 @@
-//! Motor-side messages: the description of one node of the vehicle's kinematic tree
-//! (`MotorModel`), the feedback and command exchanged with the actuators (`MotorFeedBack`,
-//! `MotorCommand`), the 6D wrench (`WorkVec`) that is the currency between the attitude controller
-//! and the motor mixer, and the protobuf form of the PID gains (`PIDConfig`).
+//! Motor-side messages, one role each:
+//!   - `MotorModel`: the DESCRIPTION of one node of the vehicle's motor tree (parent, pose at rest,
+//!     axis, bounds, constants). Configured once, it lives in the shared `MotorTree`;
+//!   - `MotorFeedBack`: what a motor MEASURES (its current effort);
+//!   - `MotorCommand`: what a motor is ASKED (its setpoint and its unit);
+//!   - `MotorState`: the runtime state of one motor, its last feedback and its last command;
+//!   - `WorkVec`: the 6D wrench, the currency between the attitude controller and the mixer.
 //!
 //! Units convention ("mixer units"): every effort is expressed as the physical quantity the motor
 //! applies to the vehicle, a THRUST in newtons for a thruster and an ANGLE in radians for a joint.
@@ -9,11 +12,12 @@
 //! Gazebo vehicle controller), where the effort law
 //! `T = transmission_factor * effort_constant * w^exp_command_law` converts in both directions.
 
-use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector6};
+use nalgebra::{Vector3, Vector6};
 use prost_derive::{Enumeration, Message};
 use prost_types::Timestamp;
+use serde::{Deserialize, Serialize};
 
-use crate::messages::{pose_messages::Transform, registered_message::{MessageType, Translatable, UnitQuat, Vec3}};
+use crate::messages::registered_message::{MessageType, Translatable, UnitQuat, Vec3};
 
 /// Generate the classic component-wise arithmetic for a plain struct of `f64` fields:
 /// `+ - -(neg) += -=`, scalar `* /` (both `vec * f64` and `f64 * vec`), and `Sum`.
@@ -63,7 +67,9 @@ macro_rules! impl_operators {
 /// Enum that represent the life status of a motor
 ///
 /// Carried as an `i32` in `MotorFeedBack::status` (prost enumeration). The discriminants start at
-/// 1, so the prost default `0` maps to no variant. The Gazebo controller reports `IDLE`.
+/// 1, so the prost default `0` maps to no variant. It is given by the source of the measurement
+/// (`MotorState::record_measurement`): the Gazebo controller reports `RUNNING` with every
+/// measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Enumeration, Debug)]
 pub enum MotorStatus {
     /// Motor known but not driven.
@@ -76,9 +82,9 @@ pub enum MotorStatus {
 
 /// Enum that represent the type of being apply to a motor
 ///
-/// Declares the UNIT of `MotorCommand::setpoint_value` / `MotorFeedBack::setpoint_value`. The
-/// mixer emits `THRUST` for thrusters and `ANGULARPOSITION` for joints; the conversion from
-/// newtons to a rotor speed happens in the vehicle controller, at the hardware boundary only.
+/// Declares the UNIT of `MotorCommand::setpoint_value`. The mixer emits `THRUST` for thrusters and
+/// `ANGULARPOSITION` for joints (`MotorState::get_command`); the conversion from newtons to a rotor
+/// speed happens in the vehicle controller, at the hardware boundary only.
 #[derive(Clone, Copy, PartialEq, Eq, Enumeration, Debug)]
 pub enum MotorCommandType {
     /// Setpoint is an angle in rad (position-controlled joint).
@@ -101,10 +107,11 @@ pub enum MotorCommandType {
 /// * `LinearMotionALong{X,Y,Z}` (4..=6): a thruster. Decision variable = its thrust (N).
 ///
 /// The axis is expressed in the motor's OWN frame; the mixer rotates it into the body frame with
-/// the resolved `Transform::orientation`. The family is tested by ordering on the discriminant
-/// (`working_axis <= RotatingAroundZ` = joint, `>= LinearMotionALongX` = thruster).
-// NOTE: because of those ordering tests, `Unknown` (0) falls in the joint family inside the mixer.
-#[derive(Clone, Copy, PartialEq, Eq, Enumeration, Debug)]
+/// the resolved `Transform::orientation`. The family is read with `MotorModel::is_joint` /
+/// `is_thruster`: `Unknown` belongs to neither, and `MotorTree::new` refuses it.
+///
+/// In a JSON configuration file it is written by its name, e.g. `"RotatingAroundY"`.
+#[derive(Clone, Copy, PartialEq, Eq, Enumeration, Debug, Serialize, Deserialize)]
 pub enum WorkingAxis {
     /// Not set (prost default).
     Unknown= 0,
@@ -120,6 +127,22 @@ pub enum WorkingAxis {
     LinearMotionALongY= 5,
     /// Produce Linear Motion along the Z axis
     LinearMotionALongZ= 6,
+}
+
+/// serde adapter for `MotorModel::working_axis`: stored as the prost `i32`, written in JSON by the
+/// `WorkingAxis` name. An unknown value is written `Unknown`.
+mod working_axis_by_name {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::WorkingAxis;
+
+    pub fn serialize<S: Serializer>(axis: &i32, serializer: S) -> Result<S::Ok, S::Error> {
+        return WorkingAxis::try_from(*axis).unwrap_or(WorkingAxis::Unknown).serialize(serializer);
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i32, D::Error> {
+        return Ok(WorkingAxis::deserialize(deserializer)? as i32);
+    }
 }
 
 /// A 6D wrench (spatial force) expressed in the vehicle body frame, with the moment
@@ -205,12 +228,13 @@ pub struct PIDConfig {
 
 /// Serializable / Deserializable struct using protobuf that represent a motor command
 ///
-/// One element of `AnyMessage::MotorCommands`, produced by `MotorsMixer` (one per motor per cycle)
-/// and consumed by the vehicle controller. `setpoint_value` is an EFFORT in mixer units and
-/// `command_type` says which: `THRUST` = N, `ANGULARPOSITION` = rad, `VELOCITY` = rad/s. The Gazebo
-/// controller converts newtons into a rotor speed at the hardware boundary, never the mixer.
+/// What a motor is ASKED. One element of `AnyMessage::MotorCommands`, produced by `MotorsMixer`
+/// (one per motor per cycle, through `MotorState::get_command`) and consumed by the vehicle controller.
+/// `setpoint_value` is an EFFORT in mixer units and `command_type` says which: `THRUST` = N,
+/// `ANGULARPOSITION` = rad, `VELOCITY` = rad/s. The Gazebo controller converts newtons into a rotor
+/// speed at the hardware boundary, never the mixer. The ONLY place a setpoint lives.
 ///
-/// Derives `Message` but is not `Translatable`: it does not go on the wire on its own.
+/// Derives `Message` but is not `Translatable`: on the wire it travels inside a `MotorState`.
 #[derive(Clone, PartialEq, Message)]
 pub struct MotorCommand {
     /// Time the command was produced.
@@ -227,12 +251,11 @@ pub struct MotorCommand {
     pub setpoint_value: f64,
 }
 
-/// Serializable / Deserializable struct using protobuf that represent motor specs, the last command applied, it's status, ...
+/// Serializable / Deserializable struct using protobuf that represent what a motor measures
 ///
-/// Published per motor by the vehicle controller (on the motor-feedback channel, or on the wire as
-/// `AnyMessage::MotorState`, tag `MessageType::MotorFeedBackMessage`) and copied into the mixer's
-/// `MotorController` (`update_motor_feedback`), where `current_value` is the state the
-/// allocation is linearised around.
+/// Published per motor by the vehicle controller on the motor-feedback channel; the mixer keeps the
+/// latest one in its `MotorState` of that motor, where `current_value` is the state the allocation
+/// is linearised around. Measurements only: the setpoint lives in `MotorCommand`.
 #[derive(Clone, PartialEq, Message)]
 pub struct MotorFeedBack {
     /// Time of the measurement.
@@ -247,53 +270,59 @@ pub struct MotorFeedBack {
     /// CURRENT EFFORT of the motor in mixer units: the thrust T in N for a thruster (reconstructed by
     /// the vehicle controller from the measured rotor speed with the effort law), the angle in rad for
     /// a joint. The mixer reads it as the linearisation point of a thruster and as the joint angle
-    /// theta when resolving the motor transforms (`compute_motor_transforms`).
+    /// theta when resolving the motor transforms (`MotorTree::transforms`).
     #[prost(double, tag = "4")]
     pub current_value: f64,
-    /// Last effort commanded to the motor, same unit as `current_value`.
-    #[prost(double, tag = "5")]
-    pub setpoint_value: f64,
-    /// `MotorCommandType` as i32: declares the unit of `setpoint_value`.
-    #[prost(enumeration = "MotorCommandType", tag = "6")]
-    pub command_type: i32,
-    /// Gains of the per-motor servo loop (see `PIDConfig`).
-    #[prost(message, optional, tag = "7")]
-    pub pid_config: Option<PIDConfig>,
-    /// Frequency (Hz) of the per-motor servo loop on the hardware side (the Gazebo controller
-    /// reports 50).
-    #[prost(uint32, tag = "8")]
-    pub control_frequency: u32,
 }
 
-impl Translatable for MotorFeedBack {
-    const MSG_TYPE: MessageType= MessageType::MotorFeedBackMessage;
+/// Serializable / Deserializable struct using protobuf that represent the runtime state of a motor
+///
+/// What ONE motor measures (`feedback`) and what it is asked (`command`), each `None` until the
+/// first one. The mixer keeps one per motor (latest feedback received, command it emitted), and so
+/// does the vehicle controller (measurement it published, command it applied). It is also the form a
+/// motor takes on the wire (`AnyMessage::MotorState`), for an interface that displays the vehicle.
+#[derive(Clone, PartialEq, Message)]
+pub struct MotorState {
+    /// Id of the motor (`MotorModel::id`).
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    /// Last measurement of the motor.
+    #[prost(message, optional, tag = "2")]
+    pub feedback: Option<MotorFeedBack>,
+    /// Last command of the motor.
+    #[prost(message, optional, tag = "3")]
+    pub command: Option<MotorCommand>,
+}
+
+impl Translatable for MotorState {
+    const MSG_TYPE: MessageType= MessageType::MotorStateMessage;
 }
 
 /// Serializable / Deserializable struct using protobuf that represent a a motor in the motor graph of a vehicle
 ///
 /// The motors of a vehicle form a tree (the "motor graph"): a node is mounted on its parent
-/// (`parent_id`, `0` = mounted on the body) and carries its children (`child_ids`). Its pose at rest
-/// is given in the PARENT frame (`relative_location`, `relative_orientation`); the mixer resolves
-/// the pose of every node in the body frame (`pose_messages::Transform`) by composing the chain,
-/// adding each joint's current angle. `working_axis` selects the family (joint / thruster) and with
-/// it the meaning of the bounds and constants below.
+/// (`parent_id`, `0` = mounted on the body); its children are derived from that link by the
+/// `MotorTree`. Its pose at rest is given in the PARENT frame (`relative_location`,
+/// `relative_orientation`); the `MotorTree` resolves the pose of every node in the body frame
+/// (`pose_messages::Transform`) by composing the chain, adding each joint's current angle.
+/// `working_axis` selects the family (joint / thruster) and with it the meaning of the bounds and
+/// constants below. The description only, configured once: the measurement and the command live in
+/// `MotorState`.
 ///
-/// Wire tag `MessageType::MotorModelMessage` (encodable, but not decoded by `decode_frame`; in the
-/// Gazebo binary the models travel on a dedicated channel, wrapped in a `MotorController`).
-#[derive(Clone, PartialEq, Message)]
+/// Read from a JSON configuration file (`MotorTree::from_json`), every field optional (default 0,
+/// `None`), the vectors written `[x, y, z]` and `working_axis` by its name. Wire tag
+/// `MessageType::MotorModelMessage` (encodable, but not decoded by `decode_frame`).
+#[derive(Clone, PartialEq, Message, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MotorModel {
     /// Unique id of the motor. `0` cannot be used as an id, since `parent_id == 0` means "mounted on
-    /// the body". The Gazebo controller derives it from the joint name.
+    /// the body". The Gazebo controller derives it from the link name.
     #[prost(uint32, tag = "1")]
     pub id: u32,
     /// Id of this motor's parent in the kinematic chain. `0` if the motor is a root
     /// (mounted directly on the vehicle body).
     #[prost(uint32, tag = "2")]
     pub parent_id: u32,
-    /// Ids of the motors mounted on this one. A single joint can drive several children
-    /// (e.g. a steering column turning both front wheels).
-    #[prost(uint32, repeated, tag = "3")]
-    pub child_ids: Vec<u32>,
     /// Position of this motor relative to its parent, in the parent's frame. For a root
     /// motor it is relative to the vehicle origin (the CoM offset is applied at use).
     /// Unit: m.
@@ -307,10 +336,8 @@ pub struct MotorModel {
     /// Axis the motor acts on: a rotation axis for an angular joint, a force direction
     /// for a linear motor / thruster.
     #[prost(enumeration = "WorkingAxis", tag = "6")]
+    #[serde(with = "working_axis_by_name")]
     pub working_axis: i32,
-    /// PID gains used to servo this motor (angular motors).
-    #[prost(message, optional, tag = "7")]
-    pub pid_config: Option<PIDConfig>,
     /// Lower / upper bound of the motor's command: joint limits (rad) for an angular
     /// motor, `0`..max effort for a thruster once mapped through the effort law.
     /// The mixer clamps both the commanded effort and the per-cycle increment to this range.
@@ -344,9 +371,6 @@ pub struct MotorModel {
     /// angle increment per cycle is clamped to `+/- max_rot_speed * dt`.
     #[prost(double, tag = "12")]
     pub max_rot_speed: f64,
-    /// KV rating of the motor (rpm per volt). Descriptive only: not read by the control stack today.
-    #[prost(double, tag = "13")]
-    pub motor_kv: f64,
     /// Exponent of the effort law (2 for a propeller `k*w^2`, 1 for a linear torque motor).
     #[prost(uint32, tag = "14")]
     pub exp_command_law: u32,

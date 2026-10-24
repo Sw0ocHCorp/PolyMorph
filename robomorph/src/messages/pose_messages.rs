@@ -71,7 +71,7 @@ impl Translatable for IMUMeasurements {
     const MSG_TYPE: MessageType= MessageType::ImuRawMessage;
 }
 
-/// Resolved pose of a motor in the BODY frame, computed by `MotorsMixer::compute_motor_transforms`
+/// Resolved pose of a motor in the BODY frame, computed by `MotorTree::transforms`
 /// from the `MotorModel` chain (parent poses composed, each joint's current angle included).
 ///
 /// Internal type: not a protobuf message, never on the wire.

@@ -1,5 +1,5 @@
 pub mod motion_controller;
-pub mod motor_controller;
+pub mod motor;
 pub mod motors_mixer;
 pub mod motor_tree;
 pub mod attitude_controller;

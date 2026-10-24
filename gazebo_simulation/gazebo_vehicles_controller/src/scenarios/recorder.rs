@@ -16,7 +16,7 @@
 use std::{collections::BTreeMap, fs::{self, File, OpenOptions}, io::{self, LineWriter, Write}, path::Path, time::{Duration, Instant}};
 
 use nalgebra::{Quaternion, UnitQuaternion};
-use robomorph::{control::motion::motor_controller::quaternion_to_euler, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorFeedBack}, pose_messages::Pose, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use robomorph::{control::motion::motor::quaternion_to_euler, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorFeedBack}, pose_messages::Pose, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::scenarios::timestamp_to_s;

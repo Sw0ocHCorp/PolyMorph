@@ -10,7 +10,7 @@ use nalgebra::{DVector, Matrix3, Matrix6xX, Quaternion, Rotation3, UnitQuaternio
 use prost_derive::Message;
 use tokio::sync::broadcast::Receiver;
 
-use crate::{control::{motion::motor_controller::{MotorController, working_axis_i32_to_vec3}, pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, MotorStatus, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::{pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
 /// Standard gravity (m/s^2). Multiplied by `VehicleKinematicConfig::weight` it gives the
 /// weight compensation `m * g` that the velocity stage puts into the desired force f_d.

@@ -28,7 +28,7 @@
   <text x="557" y="176" text-anchor="middle" font-size="12" font-weight="600">control</text>
   <text x="557" y="196" text-anchor="middle" font-size="10.5" opacity="0.75">AttitudeController</text>
   <text x="557" y="212" text-anchor="middle" font-size="10.5" opacity="0.75">MotorsMixer</text>
-  <text x="557" y="228" text-anchor="middle" font-size="10.5" opacity="0.75">MotorController</text>
+  <text x="557" y="228" text-anchor="middle" font-size="10.5" opacity="0.75">MotorTree</text>
   <rect x="60" y="300" width="580" height="52" rx="6" fill="currentColor" fill-opacity="0.06" stroke="#cb8b1e" stroke-width="1.2"/>
   <text x="350" y="322" text-anchor="middle" font-size="13" font-weight="600">Vehicle — Gazebo Harmonic simulation, or real hardware</text>
   <text x="350" y="341" text-anchor="middle" font-size="11" opacity="0.75">sensors, actuators, physics</text>

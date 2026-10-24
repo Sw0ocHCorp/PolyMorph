@@ -3,7 +3,7 @@ import Diagram2 from './img/motor-model-2.svg';
 
 # The motor model
 
-Files: `robomorph/src/control/motion/motor_controller.rs` (efforts) and `motor_tree.rs` (transform resolution, shared by the mixer, at the current joint angles, and by the force → attitude resolver, at rest).
+Files: `robomorph/src/control/motion/motor.rs` (what one motor computes: `MotorModel::efforts`, and its runtime `MotorState`) and `motor_tree.rs` (`MotorTree`: the tree itself, configured once and shared; its transform resolution serves the mixer, at the current joint angles, and the force → attitude resolver, at rest).
 
 ## The motor tree
 
@@ -13,6 +13,39 @@ A vehicle is described as a **tree**: *root* motors mounted on the airframe (`pa
 <Diagram1 />
 <figcaption>The OSPRAI tree. Only the data changes from one vehicle to another; the traversal does not.</figcaption>
 </figure>
+
+### One tree, configured once, shared by every stage
+
+The tree is a single `MotorTree` instance. Every stage that needs it — the mixer, the resolver, the future ones — holds a reference to that same instance (`SharedMotorTree`, an `Arc<OnceLock<MotorTree>>`), so two stages can never work on two different trees. It is written **once**: a second write is refused, and until the first one every stage abstains.
+
+Each motor plays three roles, carried by three messages:
+
+| Message | Role | Lifetime |
+|---|---|---|
+| `MotorModel` | the **description**: parent, pose at rest, working axis, bounds, constants | fixed, inside the `MotorTree` |
+| `MotorFeedBack` | what the motor **measures**: its current effort (N or rad), and its status | every tick |
+| `MotorCommand` | what the motor is **asked**: a setpoint and its unit | every tick |
+
+`MotorState` groups the last feedback and the last command of one motor: the mixer keeps one per motor, so does the vehicle bridge.
+
+`MotorTree::new` checks the description before anything flies:
+- ids are unique and non-zero (0 means "the vehicle");
+- every parent exists, and no parent chain loops;
+- every axis is known;
+- `min_value ≤ max_value`.
+
+The only link stored is `parent_id`; the children, the order parents first and the reachable force subspace `S` are derived from it once, when the tree is built.
+
+Two sources build it:
+- **in simulation**, the Gazebo bridge, from the scene and the first `joint_state` message (see [the Gazebo bridge](../../simulation/gazebo.mdx#building-the-motor-tree));
+- **on the real robot**, a JSON file, read by `MotorTree::from_json`. Every field may be left out (0 or none), vectors are written `[x, y, z]`, the orientation `{w, x, y, z}` (scalar first) and the axis by its name. The OSPRAI's reference file is `gazebo_simulation/vehicles/osprai/motors.json`; one of its rotors:
+
+```json
+{ "id": 64, "parent_id": 74, "working_axis": "LinearMotionALongZ",
+  "relative_location": [0.0, 0.12, 0.0], "relative_orientation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+  "min_value": 0.1, "max_value": 17.28, "max_rot_speed": 1200.0,
+  "effort_constant": 1.2e-5, "moment_constant": -0.016, "exp_command_law": 2, "transmission_factor": 1.0 }
+```
 
 ## Step 1 — resolve every motor's pose in the body frame
 
@@ -33,7 +66,7 @@ Two things that are easy to get wrong:
 
 ## Step 2 — effectiveness column and work vector
 
-This is the central concept of the mixer, and the source of most questions. `compute_motor_efforts` returns **two** objects per motor, of different natures:
+This is the central concept of the mixer, and the source of most questions. `MotorModel::efforts` returns **two** objects per motor, of different natures:
 
 | | Effectiveness column `a_j` | Work vector `w_j` |
 |---|---|---|
@@ -49,7 +82,7 @@ This is the central concept of the mixer, and the source of most questions. `com
 
 ### The thruster
 
-Notation: `fhat = R_j · e` is the thrust direction in the body frame (unit), `p` the motor's position from the CoM, `k_m` the reaction torque per newton (signed by the propeller's spin direction), and **`T` the thrust the rotor produces right now, in newtons** — `feedback.current_value` for a thruster, reconstructed by the vehicle bridge from the measured rotor speed (`T = k·ω²`).
+Notation: `fhat = R_j · e` is the thrust direction in the body frame (unit), `p` the motor's position from the CoM, `k_m` the reaction torque per newton (signed by the propeller's spin direction), and **`T` the thrust the rotor produces right now, in newtons** — the `current_value` of its last `MotorFeedBack`, reconstructed by the vehicle bridge from the measured rotor speed (`T = k·ω²`).
 
 ```
 column       a = [ fhat ; p × fhat + k_m · fhat ]      pure geometry
@@ -98,8 +131,8 @@ A joint's column is a **tangent**: it only describes reality for a small angle. 
 
 ## Traversal order
 
-Step 1 walks the tree **root → leaves** (a child's pose needs its parent's). Step 2 walks **leaves → root** (a joint's column needs its children's work vectors). The mixer sorts motors by depth so both orders hold whatever the `HashMap` iteration order is.
+Step 1 walks the tree **root → leaves** (a child's pose needs its parent's). Step 2 walks **leaves → root** (a joint's column needs its children's work vectors). The `MotorTree` sorts its motors once, by depth then id, so both orders hold whatever the `HashMap` iteration order is, and the allocation is reproducible.
 
 ## Utilities
 
-`working_axis_to_vec3` / `_i32_` give a motor's own unit axis (`e_j`) from its `WorkingAxis`. `quaternion_to_euler` is for display only — never used by a control law.
+`MotorModel::axis` gives a motor's own unit axis (`e_j`) from its `WorkingAxis`; `is_joint` / `is_thruster` give its family (`Unknown` is neither, and `MotorTree::new` refuses it). `quaternion_to_euler` is for display only — never used by a control law.

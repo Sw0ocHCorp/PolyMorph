@@ -13,7 +13,7 @@ Files: `robomorph/src/messages/*.rs`.
 | `PoseState(Pose)` | vehicle state (attitude, IMU, GNSS…); the same struct is the **setpoint** that goes down the control cascade, see below | vehicle controller → stages, UDP; scenario player → velocity → resolver → attitude (pipe) |
 | `VehicleWrench(WorkVec)` | wrench to produce, body frame, N / N·m | attitude → mixer (pipe) |
 | `MotorCommands(Vec<MotorCommand>)` | per-motor commands, in efforts | mixer → vehicle controller |
-| `MotorState(MotorFeedBack)` | one motor's feedback | reserved for external transport |
+| `MotorState(MotorState)` | one motor's last feedback and last command | reserved for external transport (an interface displaying the vehicle) |
 | `ImuState`, `GnssState`, `LidarState` | raw samples | outward |
 | `RemoteControl` | gamepad state | remote → (unused today) |
 
@@ -62,15 +62,17 @@ The aggregated vehicle state. Fields used by control:
 
 The **same** struct is used as the attitude controller's **setpoint**, where only `orientation` (the desired attitude `q_d`) is read. The desired angular rate is implicitly zero in the current implementation, so the setpoint's `a_velocity` is not consumed yet.
 
-`Transform` (`location`, `orientation`) is a motor's *resolved* pose in the body frame, computed by the mixer. It is internal and never serialised.
+`Transform` (`location`, `orientation`) is a motor's *resolved* pose in the body frame, computed by `MotorTree::transforms`. It is internal and never serialised.
 
 ## The motor model
 
 ### `MotorModel` — one node of the kinematic tree
 
+The **description** of a motor, configured once inside the shared `MotorTree` (see [the motor model](../pipelines/motor-control/motor-model.mdx#one-tree-configured-once-shared-by-every-stage)), which also reads it from a JSON file.
+
 | Field | Meaning |
 |---|---|
-| `id`, `parent_id` (0 = root, mounted on the airframe), `child_ids` | tree topology |
+| `id`, `parent_id` (0 = root, mounted on the airframe) | tree topology; the children are derived from `parent_id` by the `MotorTree` |
 | `relative_location`, `relative_orientation` | pose **at rest**, in the **parent's** frame (root: vehicle frame; the CoM offset is applied at use). A joint's current angle is not in there. |
 | `working_axis` | the motor's **family** — see below |
 | `min_value`, `max_value` | bounds of the motor's own effort: rad for a joint, N for a thruster |
@@ -89,13 +91,17 @@ The **same** struct is used as the attitude controller's **setpoint**, where onl
 | Effectiveness column | tangent `dw/dθ`, proportional to its children's thrust | exact, purely geometric |
 | Command emitted | `ANGULARPOSITION` (rad) | `THRUST` (N) |
 
-> The family is tested by ordering on the enum discriminant, so `WorkingAxis::Unknown` (0) falls into the *joint* family inside the mixer.
+> The family is read with `MotorModel::is_joint` / `is_thruster`. `WorkingAxis::Unknown` (0) belongs to neither, and `MotorTree::new` refuses a motor that has it.
 
-### `MotorFeedBack` and `MotorCommand`
+### `MotorFeedBack`, `MotorCommand` and `MotorState`
 
-`MotorFeedBack.current_value` is the **current effort in mixer units**: thrust `T` in newtons for a thruster (reconstructed from the measured rotor speed through the effort law), angle in radians for a joint. `setpoint_value` is the last commanded effort.
+One role per message: a feedback only measures, a command only asks.
 
-`MotorCommand.command_type` **declares the unit** of `setpoint_value`: `THRUST` = N, `ANGULARPOSITION` = rad, `VELOCITY` = rad/s. The N → rad/s conversion happens at the hardware boundary, never in the mixer.
+`MotorFeedBack` (`timestamp`, `id`, `status`, `current_value`): `current_value` is the **current effort in mixer units**, thrust `T` in newtons for a thruster (reconstructed from the measured rotor speed through the effort law), angle in radians for a joint. `status` (`MotorStatus`: `IDLE`, `RUNNING`, `ERROR`) is the motor's state as the source of the measurement reports it: the Gazebo bridge reports `RUNNING`, an IO board would report a fault.
+
+`MotorCommand` (`timestamp`, `id`, `command_type`, `setpoint_value`): the only place a setpoint lives. `command_type` **declares the unit** of `setpoint_value`: `THRUST` = N, `ANGULARPOSITION` = rad, `VELOCITY` = rad/s. The N → rad/s conversion happens at the hardware boundary, never in the mixer.
+
+`MotorState` (`id`, `feedback`, `command`) is the runtime state of one motor: its last feedback and its last command, each absent until the first. `MotorState::record_measurement` refuses a non-finite measurement; `MotorState::get_command` brings the setpoint inside the motor's bounds and picks its unit from the motor's family.
 
 ## Vehicle configuration
 

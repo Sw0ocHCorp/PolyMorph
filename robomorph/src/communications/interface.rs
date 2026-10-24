@@ -1,7 +1,7 @@
 //! External links of the stack (`HardwareInterface`: UDP today, UART later) and the wire codec
 //! shared by all of them: a frame is `[1-byte MessageType][protobuf payload]`.
 
-use crate::{core::scheduler::Process, messages::{lidar_messages::LidarMeasurements, motor_messages::MotorFeedBack, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, MessageType, Translatable}}};
+use crate::{core::scheduler::Process, messages::{lidar_messages::LidarMeasurements, motor_messages::MotorState, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, MessageType, Translatable}}};
 
 /// Trait that give the fundamental methods of all the hardware communication interfaces (UART / UDP / etc...)
 ///
@@ -38,8 +38,8 @@ pub fn decode_frame(buf: &[u8]) -> Option<AnyMessage> {
             IMUMeasurements::from_frame(buf).ok().map(AnyMessage::ImuState),
         x if x == MessageType::GNSSRawMessage as u8 =>
             GNSSMeasurement::from_frame(buf).ok().map(AnyMessage::GnssState),
-        x if x == MessageType::MotorFeedBackMessage as u8 =>
-            MotorFeedBack::from_frame(buf).ok().map(AnyMessage::MotorState),
+        x if x == MessageType::MotorStateMessage as u8 =>
+            MotorState::from_frame(buf).ok().map(AnyMessage::MotorState),
         x if x == MessageType::PoseMessage as u8 =>
             Pose::from_frame(buf).ok().map(AnyMessage::PoseState),
         x if x == MessageType::LidarMappingMessage as u8 =>

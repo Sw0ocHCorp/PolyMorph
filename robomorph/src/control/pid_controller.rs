@@ -4,9 +4,7 @@
 //! resets the state when the error stays small. Where it sits in the stack:
 //! * NOT used by the attitude loop, which is a state feedback (P on the angle error + P on the
 //!   measured gyro rate, no integrator);
-//! * intended for the per-motor servoing (a `PIDController` is held by every `MotorController`
-//!   and its gains travel as `motor_messages::PIDConfig`) and for the future velocity loop, where
-//!   the only integrator of the cascade lives.
+//! * intended for the future velocity loop, where the only integrator of the cascade lives.
 
 use std::{fmt::Debug, marker::PhantomData, ops::Add, time::Duration};
 pub trait PIDValue: Copy + Default + Debug + Add<Output = Self> {

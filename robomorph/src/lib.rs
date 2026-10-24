@@ -2,16 +2,18 @@
 //!
 //! * `messages`: the message catalogue (`AnyMessage`, wire tags, `Vec3` / `UnitQuat`) and the
 //!   protobuf structs exchanged between processes and with the hardware (`Pose`, IMU / GNSS /
-//!   lidar samples, `MotorModel`, `MotorFeedBack`, `MotorCommand`, `WorkVec`).
+//!   lidar samples, `MotorModel`, `MotorFeedBack`, `MotorCommand`, `MotorState`, `WorkVec`).
 //! * `core`: the scheduler (`Process`, `ProcessesPipeline`, `Scheduler`) that runs the processes at
 //!   their period and hands each output to the next process through the pipe.
 //! * `communications`: the `HardwareInterface` trait, the wire codec and the UDP implementation.
 //! * `control`: the scalar `PIDController`, the gamepad input, and the motion stack:
 //!   `AttitudeController` (pose -> wrench setpoint), `MotorsMixer` (wrench -> per-motor efforts by
-//!   control allocation over the motor graph) and `MotorController` (one motor of that graph).
+//!   control allocation over the motor graph), `MotorTree` (the motor graph, configured once and
+//!   shared by the stages) and `motor` (what one motor of that graph computes).
 //!
-//! The vehicle-specific side (Gazebo bridge, motor graph description, actuator unit conversion)
-//! lives in the `gazebo_vehicles_controller` binary, which wires these pieces together.
+//! The vehicle-specific side (Gazebo bridge, motor graph discovery, actuator unit conversion) lives
+//! in the `gazebo_vehicles_controller` binary, which wires these pieces together. A real robot
+//! describes its motor graph in a JSON file instead (`MotorTree::from_json`).
 
 pub mod messages;
 pub mod core;

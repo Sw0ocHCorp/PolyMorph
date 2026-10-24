@@ -31,6 +31,90 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 ## [Unreleased]
 
 ---
+### 2026-10-24 — Share one motor tree between the stages; split motor description, measurement and command
+
+#### Added
+- `MotorTree`:
+  + created a struct to embed the motor architecture of the vehicle
+  + contains the tools to get the motor's transforms
+  + checked when built (`MotorTree::new`): ids unique and not 0, known parents, no parent cycle, known working axis, `min_value <= max_value`. A faulty description is refused with a message instead of flying a wrong tree
+  + the parents-first order, the children of each motor (derived from `parent_id`, the only link stored) and the reachable force subspace S are computed once, when the tree is built
+  + `from_json(...)`: reads the tree from a JSON configuration file (vectors as `[x, y, z]`, the working axis by its name)
+- `MotorModel`:
+  + add the functions to compute the working axis of the motor and the efforts the motor can produce in the given situation
+  + add serde serialization / deserialization tools
+  + `is_joint()` / `is_thruster()`: the motor's family (`Unknown` is neither), `clamp(...)`: a value brought inside the motor's bounds
+- `MotorState`:
+  + contains the feedback of the simulated / hardware motors but also the last command sent to the motor
+  + add protobuf serialization / deserialization tools
+  + `record_measurement(...)`: records a measurement with the motor's status (a non-finite value is refused), `get_measured_value()`, `get_command(...)`: the command brought inside the motor's bounds, in the unit of its family (N or rad)
+- `Vec3` && `UnitQuat` && `WorkingAxis`:
+  + add serde Serialization / Deserialization trait to those objects to be able to use them in a vehicle config file
+- `main.rs`:
+  + initialize a `SharedMotorTree`, the motor architecture, this kind of `MotorTree` can be set one time and after, available in read only(fit especially for the `MotorTree` usage: set one time using discover process or by loading a config file)
+  + the same `SharedMotorTree` is given to the vehicle controller (the only writer), the mixer and the resolver
+- `gazebo_simulation/vehicles/osprai/motors.json`:
+  + the OSPRAI's motor tree as a configuration file, with a test checking it describes the tree the Gazebo bridge discovers
+- `robomorph/Cargo.toml`:
+  + `serde` and `serde_json`
+- Tests:
+  + `the_osprai_allocation_is_unchanged`: characterisation of the mixer, written and seen green BEFORE the rework; the commands stayed identical to the bit after it
+  + `MotorTree`: a faulty description is refused, order and children, lever arms about the CoM (moved from the mixer), the force subspace (moved from the resolver), a tree read from a JSON file
+
+
+#### Changed
+- `interface.rs`:
+  + `decode_frame(...)` replace `MotorFeedBack` decoding with new motor struct `MotorState` 
+  + `encode_frame(...)`: `AnyMessage::MotorState` now carries a `MotorState`
+- `MessageType`:
+  + `MotorFeedBack` => `MotorState` 
+  + `MotorFeedBackMessage` => `MotorStateMessage` (tag 2 unchanged)
+- `MotorFeedBack`:
+  + only the measurement: `timestamp`, `id`, `status`, `current_value`. `status` (`MotorStatus`) is given by the source of the measurement: `RUNNING` in Gazebo
+- `MotorsMixer`:
+  + using `MotorTree` and `MotorModel` instead of `MotorController`
+  + one `MotorState` per motor: the feedback received and the command emitted (the command no longer goes through a scratch `MotorFeedBack::setpoint_value`)
+  + `set_motor_tree(...)` replaces `set_motor_config_receiver(...)`; the motors are no longer sorted at every pass (the tree's order); it abstains while the tree is not configured
+- `ForceSubspace`:
+  + `force_to_attitude_resolver.rs` => `motor_tree.rs`
+  + computed once when the tree is built: `MotorTree::force_subspace()`
+- `ForceToAttitudeResolver`:
+  + `set_motor_tree(...)` replaces `set_motor_config_receiver(...)`: S is read from the shared tree, no copy of the motors nor of S anymore
+- `OspraiController`:
+  + using `MotorTree` instead of `MotorController`s to save the motor's architecture of the vehicle
+  + the discovered descriptions are completed on the first `joint_state` message, then consumed into the shared tree, written once: the bridge keeps only a `MotorState` per motor, and reads the descriptions from the tree to convert the commands
+  + `motors_initialized` removed: the tree itself says whether it is configured
+- `motor_controller.rs` => `motor.rs`: what one motor computes (`impl MotorModel`, `impl MotorState`)
+- Docs: `motor-model.mdx` (new section "One tree, configured once, shared by every stage"), `mixer.mdx`, `resolver.mdx`, `simulation/gazebo.mdx`, `framework/messages.mdx`, `framework/overview.mdx` and its diagram
+
+
+#### Removed
+- `MotorController`:
+  + `MotorState` is replacing it because, aside from some tools, the `MotorController` contains `MotorModel`, now put in `MotorTree`,
+  `MotorFeedBack` and `MotorCommand`(in `MotorFeedBack`)
+- `MotorModel`:
+  + remove `motor_kv`
+  + `child_ids`: derived from `parent_id` by the `MotorTree`
+  + `pid_config`: never read
+- `MotorFeedBack`:
+  + `setpoint_value` && `command_type` because it represents the last command sent but `MotorCommand` exists and stores already those params
+  + `pid_config` && `control_frequency`: never read
+- `PIDConfig`: no field uses it anymore
+- the motor configuration channel (`main.rs`): replaced by the `SharedMotorTree`
+- `receive_motors(...)`, `parents_first_order(...)`, `motor_transforms(...)`: now done by the `MotorTree` (`new(...)`, `order()`, `transforms(...)`)
+- `working_axis_to_vec3(...)`, `working_axis_i32_to_vec3(...)` and their `_vec6` versions: replaced by `MotorModel::axis()`
+- `MotorsMixer`: `add_or_update_motor(...)`, `get_motors()`, `get_motors_mut()`, `new_default(...)` (no caller)
+
+
+#### Fixed
+- a motor with an `Unknown` working axis was counted as a joint and got a NaN transform: it is now neither a joint nor a thruster, and `MotorTree::new` refuses it
+- `update_motor_feedback(...)` compared the new feedback with the stored one (same `id` and `command_type`): a motor created with `MotorFeedBack::default()` refused every real feedback. The mixer now stores each feedback by id
+
+
+#### Known issues
+- `report.rs`: a gap of exactly 2 periods (20 ms, allowed) between two updates is judged out of bounds, because the difference of two floating-point timestamps gives 0.020000000000000018 > 0.02. It made a valid `hover` run INVALID
+
+
 ### 2026-10-23 — Force to attitude resolver implemented
 
 #### Added

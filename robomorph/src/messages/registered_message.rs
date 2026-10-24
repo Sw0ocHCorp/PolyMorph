@@ -15,7 +15,8 @@ use prost::{DecodeError, Message};
 use crate::control::joystick::joystick_controller::RemoteControl;
 use crate::control::pid_controller::PIDValue;
 use crate::messages::motor_messages::WorkVec;
-use crate::messages::{lidar_messages::LidarMeasurements, motor_messages::{MotorCommand, MotorFeedBack}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}};
+use crate::messages::{lidar_messages::LidarMeasurements, motor_messages::{MotorCommand, MotorState}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}};
+use serde::{Deserialize, Serialize};
 
 /// Enum that represent the ID of the message can be sent and / or received
 ///
@@ -29,8 +30,8 @@ pub enum MessageType {
     ImuRawMessage = 0,
     /// `pose_messages::GNSSMeasurement`
     GNSSRawMessage = 1,
-    /// `motor_messages::MotorFeedBack`
-    MotorFeedBackMessage = 2,
+    /// `motor_messages::MotorState`
+    MotorStateMessage = 2,
     /// `motor_messages::MotorModel`
     // NOTE: encodable (`MotorModel: Translatable`) but `decode_frame` has no arm for this tag and
     // `AnyMessage` has no variant carrying a `MotorModel`: such a frame is dropped on reception.
@@ -59,9 +60,8 @@ pub enum AnyMessage {
     ImuState(IMUMeasurements),
     /// Raw GNSS sample.
     GnssState(GNSSMeasurement),
-    /// Feedback of ONE motor (current effort, last setpoint, status), published per motor by the
-    /// vehicle controller.
-    MotorState(MotorFeedBack),
+    /// Runtime state of ONE motor: its last measurement and its last command (`MotorState`).
+    MotorState(MotorState),
     /// One command per motor for the current cycle, produced by `MotorsMixer` and consumed by the
     /// vehicle controller (Gazebo side), which converts it to actuator units.
     MotorCommands(Vec<MotorCommand>),
@@ -85,8 +85,23 @@ pub enum AnyMessage {
 /// On the wire: three `double` fields, tags 1 / 2 / 3 = x / y / z. Messages embed it as
 /// `Option<Vec3>` (prost message field), `None` when absent. The derived `Default` is the zero
 /// vector. The unit and frame are those of the field that carries it (m, m/s, rad/s, ...).
-#[derive(Copy, Clone, PartialEq, Default, Debug)]
+///
+/// In a JSON configuration file it is written `[x, y, z]`.
+#[derive(Copy, Clone, PartialEq, Default, Debug, Serialize, Deserialize)]
+#[serde(from = "[f64; 3]", into = "[f64; 3]")]
 pub struct Vec3(pub Vector3<f64>);
+
+impl From<[f64; 3]> for Vec3 {
+    fn from(v: [f64; 3]) -> Self {
+        return Self::new(v[0], v[1], v[2]);
+    }
+}
+
+impl From<Vec3> for [f64; 3] {
+    fn from(v: Vec3) -> Self {
+        return [v.x, v.y, v.z];
+    }
+}
 
 impl Vec3 {
     /// Build from three components (same order as `Vector3::new`).
@@ -229,9 +244,11 @@ impl Message for Vec3 {
 /// Meaning depends on the message: in `Pose::orientation` it is the vehicle attitude BODY -> WORLD;
 /// in `MotorModel::relative_orientation` / `Transform::orientation` it is a motor frame -> parent
 /// (resp. body) frame.
+///
+/// In a JSON configuration file it is written `{"w": .., "x": .., "y": .., "z": ..}`.
 // NOTE: the conversions below are with `nalgebra::UnitQuaternion<f64>`; the `num_quaternion::Q64`
 // mention above predates the switch to nalgebra.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct UnitQuat {
     /// Scalar (real) part.
     pub w: f64,

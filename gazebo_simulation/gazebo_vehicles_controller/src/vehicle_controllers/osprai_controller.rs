@@ -3,13 +3,13 @@
 //! scene, converts efforts to actuator units and publishes the commands. Vehicle-specific by design:
 //! everything generic lives in `robomorph`. See `docs/docs/simulation/gazebo.mdx`.
 
-use std::{collections::HashMap, f64::consts::PI, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::Duration};
+use std::{collections::HashMap, sync::{Arc, Mutex, OnceLock}, time::Duration};
 
 use chrono::Utc;
 use gz::{msgs::{actuators::Actuators, empty::Empty, image::Image, imu::IMU, laserscan::LaserScan, model::Model, navsat::NavSat, odometry::Odometry, scene::Scene}, transport::{Node, Publisher}};
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use prost_types::Timestamp;
-use robomorph::{communications::interface::HardwareInterface, control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_controller::{MotorController, quaternion_to_euler, working_axis_to_vec3}, motors_mixer::MotorsMixer}, pid_controller::PIDController}, core::scheduler::Process, messages::{lidar_messages::{LidarMeasurements, Ray}, motor_messages::{MotorCommandType, MotorFeedBack, MotorModel, MotorStatus, PIDConfig, WorkingAxis}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use robomorph::{communications::interface::HardwareInterface, control::{motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor::quaternion_to_euler, motor_tree::{MotorTree, SharedMotorTree}, motors_mixer::MotorsMixer}, pid_controller::PIDController}, core::scheduler::Process, messages::{lidar_messages::{LidarMeasurements, Ray}, motor_messages::{MotorCommandType, MotorFeedBack, MotorModel, MotorState, MotorStatus, WorkingAxis}, pose_messages::{GNSSMeasurement, IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::vehicle_controllers::vehicle_controller::VehicleController;
@@ -151,7 +151,9 @@ pub struct OspraiController {
     controller_node: Option<Node>,
     /// Receiver of the cmd from Hardware Interface
     interface_cmd_receiver: Option<broadcast::Receiver<AnyMessage>>,
-    motor_config_sender: Option<broadcast::Sender<MotorController>>,
+    /// The motor tree of the vehicle, shared with the control stages: written ONCE here, when the
+    /// first `joint_state` message completes the discovery; read by `exec` to convert the commands.
+    motor_tree: SharedMotorTree,
     /// Telemetry sender to Hardware Interface
     telemetry_sender: Option<broadcast::Sender<AnyMessage>>,
     motor_feedback_sender: Option<broadcast::Sender<MotorFeedBack>>,
@@ -160,10 +162,11 @@ pub struct OspraiController {
     motors_command_sequence: Vec<u8>,
     /// Publisher of `/osprai/command/motor_setpoints` (rotor speeds in rad/s, arm positions in rad).
     motors_command_publisher: Option<Publisher<Actuators>>,
-    /// Shared with the Gazebo subscription callbacks, which run outside of `&self`
-    motors_initialized: Arc<AtomicBool>,
     period: Duration,
-    motors: Arc<Mutex<Vec<MotorController>>>,
+    /// The runtime state of each motor (the measurement it publishes, the command it applied), found
+    /// by `MotorState::id`. Its description is in `motor_tree` only. Shared with the Gazebo
+    /// subscription callbacks, which run outside of `&self`.
+    motors: Arc<Mutex<Vec<MotorState>>>,
     verbose: bool,
 }
 
@@ -174,10 +177,9 @@ impl OspraiController {
                 interface_cmd_receiver: Some(cmd_receiver),
                 telemetry_sender: None,
                 motors_command_publisher: None,
-                motor_config_sender: None,
+                motor_tree: Arc::new(OnceLock::new()),
                 motor_feedback_sender: None,
                 motors_command_sequence: vec![0, 0, 0, 0],
-                motors_initialized: Arc::new(AtomicBool::new(false)),
                 period: Duration::from_millis(0),
                 motors: Arc::new(Mutex::new(Vec::new())),
                 verbose,
@@ -194,18 +196,19 @@ impl OspraiController {
                 interface_cmd_receiver: Some(cmd_receiver),
                 telemetry_sender: None,
                 motors_command_publisher: None,
-                motor_config_sender: None,
+                motor_tree: Arc::new(OnceLock::new()),
                 motor_feedback_sender: None,
                 motors_command_sequence: vec![0, 0, 0, 0],
-                motors_initialized: Arc::new(AtomicBool::new(false)),
                 period: Duration::from_millis(0),
                 motors: Arc::new(Mutex::new(Vec::new())),
                 verbose
         };
     }
 
-    pub fn set_motor_config_sender(&mut self, motor_config_sender: broadcast::Sender<MotorController>) {
-        self.motor_config_sender= Some(motor_config_sender);
+    /// The motor tree shared with the control stages: the bridge writes it once, when it has
+    /// discovered the motors.
+    pub fn set_motor_tree(&mut self, motor_tree: SharedMotorTree) {
+        self.motor_tree= motor_tree;
     }
 
     pub fn set_motor_feedback_sender(&mut self, motor_feedback_sender: broadcast::Sender<MotorFeedBack>) {
@@ -223,9 +226,8 @@ impl Default for OspraiController {
                 telemetry_sender: None,
                 motors_command_publisher: None,
                 motors_command_sequence: vec![0, 0, 0, 0],
-                motor_config_sender: None,
+                motor_tree: Arc::new(OnceLock::new()),
                 motor_feedback_sender: None,
-                motors_initialized: Arc::new(AtomicBool::new(false)),
                 period: Duration::from_millis(0),
                 motors: Arc::new(Mutex::new(Vec::new())), 
                 // quiet by default: the verbose prints (IMU, odometry and joint_state at up to 1 kHz)
@@ -370,6 +372,9 @@ impl VehicleController for OspraiController {
                 }
             });
 
+            // the descriptions discovered in the scene, completed by the first joint_state message,
+            // then consumed into the motor tree: no copy of them stays in the bridge
+            let mut discovered: Vec<MotorModel>= Vec::new();
             if let Some((scene, true)) = node.request::<Empty, Scene>(
                 "/world/my_environment/scene/info",
                 &Empty::default(),
@@ -389,43 +394,27 @@ impl VehicleController for OspraiController {
                                     self.motors_command_sequence[3]= link_id;
                                 }
                                 if link.name.contains("arm"){
+                                    // parent and bounds come with the first joint_state message
                                     let motor_model= MotorModel {
                                         id: link_id as u32,
                                         parent_id: 0,
-                                        child_ids: Vec::new(),
                                         relative_location:  Some(Vec3::new(link.pose.position.x, 
                                                                         link.pose.position.y, 
                                                                         link.pose.position.z)),
                                         working_axis: WorkingAxis::RotatingAroundY as i32,
                                         min_value: 0.0,
                                         max_value: 0.0,
-                                        relative_orientation: Some(UnitQuat::from(UnitQuaternion::from_axis_angle(&working_axis_to_vec3(WorkingAxis::RotatingAroundY), 0.0))),
-                                        pid_config: Some(PIDConfig { p: 0.2, i: 1.0, d: 0.0, min_correction_error: 0.0, max_error_accum: PI }),
+                                        relative_orientation: Some(UnitQuat::from(UnitQuaternion::identity())),
                                         exp_command_law: 1,
                                         max_rot_speed: 0.0,
                                         transmission_factor: 1.0,
                                         effort_constant: 1.2e-5,
                                         moment_constant: 0.016,
-                                        motor_kv: 0.0
                                     };
-                                    let now= Timestamp {
-                                        seconds: Utc::now().timestamp(),
-                                        nanos: Utc::now().timestamp_subsec_nanos() as i32,
-                                    };
-                                    let motor_feedback= MotorFeedBack { timestamp: Some(now),
-                                        id: link_id as u32,
-                                        status: MotorStatus::IDLE as i32,
-                                        command_type: MotorCommandType::ANGULARPOSITION as i32,
-                                        current_value: 0.0,
-                                        setpoint_value: 0.0,
-                                        pid_config: Some(PIDConfig { p: 1.0, i: 0.0, d: 0.0, 
-                                                            min_correction_error: 0.0, max_error_accum: PI}),
-                                        control_frequency: 50,
-                                    };
+                                    discovered.push(motor_model);
                                     if let Ok(mut motors) = self.motors.clone().lock() {  
-                                        motors.push(MotorController::new(motor_model, motor_feedback));
+                                        motors.push(MotorState::new(link_id as u32));
                                     }
-                                    //motor_mixer.add_or_update_motor(MotorController::new(motor_model, motor_feedback, pid));
                                 } else if link.name.contains("rotor") {
                                     // `moment_constant` is the reaction moment the rotor exerts on the AIRFRAME, per
                                     // newton of thrust, along the thrust axis. A rotor spinning counter-clockwise
@@ -439,41 +428,26 @@ impl VehicleController for OspraiController {
                                     if link.name.contains("right") {
                                         moment_constant= 0.016;
                                     }
+                                    // parent and bounds come with the first joint_state message
                                     let motor_model= MotorModel {
                                         id: link_id as u32,
                                         parent_id: 0,
-                                        child_ids: Vec::new(),
                                         relative_location:  Some(Vec3::new(link.pose.position.x, 
                                                                         link.pose.position.y, 
                                                                         link.pose.position.z)),
                                         working_axis: WorkingAxis::LinearMotionALongZ as i32,
                                         min_value: 0.0,
                                         max_value: 0.0,
-                                        relative_orientation: Some(UnitQuat::from(UnitQuaternion::from_axis_angle(&working_axis_to_vec3(WorkingAxis::RotatingAroundY), 0.0))),
-                                        pid_config: Some(PIDConfig { p: 0.2, i: 1.0, d: 0.0, min_correction_error: 0.0, max_error_accum: PI }),
+                                        relative_orientation: Some(UnitQuat::from(UnitQuaternion::identity())),
                                         exp_command_law: 2,
                                         max_rot_speed: 1200.0,
                                         transmission_factor: 1.0,
                                         effort_constant: 1.2e-5,
                                         moment_constant: moment_constant,
-                                        motor_kv: 1200.0
                                     };
-                                    let now= Timestamp {
-                                        seconds: Utc::now().timestamp(),
-                                        nanos: Utc::now().timestamp_subsec_nanos() as i32,
-                                    };
-                                    let motor_feedback= MotorFeedBack { timestamp: Some(now),
-                                        id: link_id as u32,
-                                        status: MotorStatus::IDLE as i32,
-                                        command_type: MotorCommandType::THRUST as i32,
-                                        current_value: 0.0,
-                                        setpoint_value: 0.0,
-                                        pid_config: Some(PIDConfig { p: 1.0, i: 0.0, d: 0.0, 
-                                                            min_correction_error: 0.0, max_error_accum: f64::INFINITY}),
-                                        control_frequency: 50,
-                                    };
+                                    discovered.push(motor_model);
                                     if let Ok(mut motors) = self.motors.clone().lock() { 
-                                        motors.push(MotorController::new(motor_model, motor_feedback));
+                                        motors.push(MotorState::new(link_id as u32));
                                     }
                                 }
                             if verbose.clone() {
@@ -487,140 +461,109 @@ impl VehicleController for OspraiController {
                 }
             }
 
-            let motors_initialized_cl= self.motors_initialized.clone();
             // the callback runs on the Gazebo transport thread and must be 'static, so it cannot
-            // borrow `self`: every piece of state it touches is captured as its own handle.
-            let motor_config_sender_cl= self.motor_config_sender.clone();
+            // borrow `self`: every piece of state it touches is captured as its own handle. It OWNS
+            // `discovered` (gz-transport takes an FnMut, which may mutate what it captured).
+            let motor_tree_cl= self.motor_tree.clone();
             let motor_feedback_sender_cl= self.motor_feedback_sender.clone();
             let motors_cl= self.motors.clone();
             // Runs at the simulator's joint_state rate on a gz-transport thread. `tilt_*` joints map
             // to the `arm_*` motors (angle feedback), `spin_*` joints to the `rotor_*` motors (velocity
-            // -> thrust feedback). The tree is finalised once (`motors_initialized`), then the
-            // `MotorController`s are sent to the mixer through the configuration channel.
+            // -> thrust feedback). Ids are the byte-sum of the motor's link name. Two steps:
+            //   1. once, on the first message: the discovered descriptions are completed (parents,
+            //      bounds, positions relative to the parent) and become the shared `MotorTree`, the
+            //      very instance every control stage reads; `discovered` is emptied into it;
+            //   2. on every message, the first one included: each joint's measurement, computed with
+            //      the motor's description IN THE TREE, recorded in its state and published.
             let _= node.subscribe("/osprai/joint_state", move |msg: Model| {
                 // verbose lines, collected while the `motors` lock is held and printed at the very end,
                 // once every lock is released (the control thread needs `motors` at every pass)
                 let mut verbose_lines: Vec<String>= Vec::new();
-                if let Some(mcs)= &motor_config_sender_cl && mcs.receiver_count() > 0  &&
-                        let Some(mfs)= &motor_feedback_sender_cl && mfs.receiver_count() > 0 {
+                let byte_sum= |name: &str| name.bytes().fold(0u8, |acc, b| acc.wrapping_add(b)) as u32;
+                // 1. the tree, once: not written yet, and descriptions left to complete (a refused tree
+                //    has emptied them, so it is not retried at every message)
+                if motor_tree_cl.get().is_none() && !discovered.is_empty() {
+                    // 1a. each joint gives its motor's parent and bounds
+                    for j in &msg.joint {
+                        let parent_id= byte_sum(&j.parent);
+                        if j.name.contains("tilt") && let Some(model)= discovered.iter_mut().find(|model| model.id == byte_sum(&j.name.replace("tilt", "arm"))) {
+                            // an arm: the joint limits, and its speed (the mixer's trust region per cycle)
+                            model.parent_id= parent_id;
+                            model.max_value= j.axis1.limit_upper;
+                            model.min_value= j.axis1.limit_lower;
+                            model.max_rot_speed= 10.0;
+                        } else if j.name.contains("spin") && let Some(model)= discovered.iter_mut().find(|model| model.id == byte_sum(&j.name.replace("spin", "rotor"))) {
+                            // a rotor: never below 0.1 N (an arm borrows its authority from its rotor's
+                            // thrust), at most the thrust of the maximum rotor speed
+                            model.parent_id= parent_id;
+                            model.min_value= 0.1;
+                            model.max_value= model.transmission_factor * model.effort_constant * 
+                                                f64::powf(1200.0, model.exp_command_law as f64);
+                        }
+                    }
+                    // 1b. the MODEL-frame position of every motor, read once before any is rewritten.
+                    //     Each child is then placed relative to its parent from these values, so the
+                    //     result does not depend on the order the motors are visited in, nor on how
+                    //     deep the tree is.
+                    let model_positions: Vec<(u32, Option<Vec3>)>= discovered.iter()
+                        .map(|model| (model.id, model.relative_location)).collect();
+                    let model_position= |id: u32| model_positions.iter().find(|(motor_id, _)| *motor_id == id).and_then(|(_, p)| *p);
+                    for model in discovered.iter_mut() {
+                        // 1c. a motor whose parent is another motor: its position becomes relative
+                        // to its PARENT's origin, the frame the tree composes it with: p_child - p_parent,
+                        // both in the model frame.
+                        // Bug #9 (fixed in brick 2): the subtraction acted on a copy and was
+                        // dropped, so a rotor kept its model-frame position as if it were relative
+                        // to its arm. The mixer then placed the rotors at (0, +/-0.48, 0.20)
+                        // instead of (0, +/-0.30, 0.10), and delivered only 0.30 / 0.48 = 62.5 % of
+                        // the demanded roll moment (measured: 0.626, runs A and B).
+                        if model.parent_id != model.id && model_positions.iter().any(|(motor_id, _)| *motor_id == model.parent_id) {
+                            if let (Some(p_child), Some(p_parent))= (model_position(model.id), model_position(model.parent_id)) {
+                                model.relative_location= Some(p_child - p_parent);
+                            }
+                        }
+                        // 1d. otherwise it hangs under the body itself: the tilt joints' parent,
+                        // base_link, is not a motor
+                        else {
+                            model.parent_id= 0;
+                        }
+                    }
+                    // 1e. the tree, checked, written ONCE into the shared slot: from now on every
+                    //     control stage reads this very instance, and the descriptions live there only
+                    match MotorTree::new(std::mem::take(&mut discovered)) {
+                        Ok(tree) => if motor_tree_cl.set(tree).is_err() {
+                            println!("[WARNING] -> the motor tree was already configured: the discovered one is ignored");
+                        },
+                        Err(error) => println!("[ERROR] -> the discovered motor tree is refused: {}", error),
+                    }
+                }
+                // 2. the measurements, with the descriptions of the tree (nothing before it exists)
+                if let Some(tree)= motor_tree_cl.get() && let Ok(mut motors)= motors_cl.lock() {
                     let now= Timestamp {
                         seconds: Utc::now().timestamp(),
                         nanos: Utc::now().timestamp_subsec_nanos() as i32,
                     };
-                    for j in msg.joint {
-                        let mut parent_id: u8= j.parent.bytes().fold(0u8, |acc, b| acc.wrapping_add(b));
-                        let mut name= j.name.clone();
-                        let mut id= 0;
-                        if j.name.contains("tilt") {
-                            name= name.replace("tilt", "arm");
-                            id= name.bytes().fold(0u8, |acc, b| acc.wrapping_add(b));
-                            if let Ok(mut motors) = motors_cl.lock() {
-                                for i in 0..motors.len() {
-                                    // `&mut`: the MotorController is mutated in place inside the Vec,
-                                    // indexing by value would try to move it out
-                                    let mc= &mut motors[i];
-                                    if mc.get_motor_model().id == id as u32 {
-                                        if motors_initialized_cl.load(Ordering::Relaxed) == false {
-                                            mc.set_parent_id(parent_id as u32);
-                                            mc.set_motor_max_value(j.axis1.limit_upper);
-                                            mc.set_motor_min_value(j.axis1.limit_lower);
-                                            mc.set_max_rot_speed(10.0);
-                                        }
-
-                                        if mc.get_working_axis() as i32 >= WorkingAxis::RotatingAroundX as i32 && mc.get_working_axis() as i32 <= WorkingAxis::RotatingAroundZ as i32 {
-                                            if verbose {
-                                                verbose_lines.push(format!("Received motor measurements: id: {}, name: {}, type: {}, value: {}", id, name, mc.get_working_axis() as i32, j.axis1.position));
-                                            }
-                                            mc.set_feedback_timestamp(now);
-                                            mc.set_motor_current_value(j.axis1.position);
-                                            let _= mfs.send(mc.get_motor_feedback().clone());
-                                        }
-                                    }
-                                }
-                            }
-                        } else if j.name.contains("spin") {
-                            name= name.replace("spin", "rotor");
-                            id= name.bytes().fold(0u8, |acc, b| acc.wrapping_add(b));
-                            if let Ok(mut motors) = motors_cl.lock() {
-                                for i in 0..motors.len() {
-                                    let mc= &mut motors[i];
-                                    if mc.get_motor_model().id == id as u32 {
-                                        if motors_initialized_cl.load(Ordering::Relaxed) == false {
-                                            let motor_model= mc.get_motor_model();
-                                            let (transmission_factor, effort_constant, exp_command_law)= (motor_model.transmission_factor, motor_model.effort_constant ,motor_model.exp_command_law);
-                                            mc.set_parent_id(parent_id as u32);
-                                            mc.set_motor_min_value(0.1);
-                                            let max_thrust= transmission_factor * effort_constant * 
-                                                                f64::powf(1200.0, exp_command_law as f64);
-                                            mc.set_motor_max_value(max_thrust);
-                                        }
-                                        
-                                        if mc.get_working_axis() as i32 >= WorkingAxis::LinearMotionALongX as i32 && mc.get_working_axis() as i32 <= WorkingAxis::LinearMotionALongZ as i32 {
-                                            if verbose {
-                                                verbose_lines.push(format!("Received motor measurements: id: {}, name: {}, type: {}, value: {}", id, name, mc.get_working_axis() as i32, j.axis1.velocity));
-                                            }
-                                            let motor_model= mc.get_motor_model();
-                                            let current_thrust= motor_model.transmission_factor * motor_model.effort_constant * 
-                                                                    j.axis1.velocity.powf(motor_model.exp_command_law as f64);
-                                            mc.set_feedback_timestamp(now);
-                                            mc.set_motor_current_value(current_thrust);
-                                            let _= mfs.send(mc.get_motor_feedback().clone());
-                                        }
-                                    }
-                                }
-                            }
+                    for j in &msg.joint {
+                        // 2a. the motor of this joint: its description and its state
+                        let name= if j.name.contains("tilt") { j.name.replace("tilt", "arm") }
+                                  else if j.name.contains("spin") { j.name.replace("spin", "rotor") }
+                                  else { continue };
+                        let id= byte_sum(&name);
+                        let (Some(model), Some(state))= (tree.get(id), motors.iter_mut().find(|state| state.id == id)) else {
+                            continue;
+                        };
+                        // 2b. its effort in mixer units: an arm's angle (rad), a rotor's thrust (N) from
+                        //     its measured speed through the effort law T = transmission * k * w^n
+                        let value= if model.is_joint() { j.axis1.position }
+                                   else { model.transmission_factor * model.effort_constant * j.axis1.velocity.powf(model.exp_command_law as f64) };
+                        if verbose {
+                            verbose_lines.push(format!("Received motor measurements: id: {}, name: {}, type: {}, value: {}", id, name, model.working_axis, value));
                         }
-                    }
-                    
-                    if motors_initialized_cl.load(Ordering::Relaxed) == false {
-                        if let Ok(mut motors) = motors_cl.lock() {
-                            // Step 1. the MODEL-frame position of every motor, read once before any is
-                            // rewritten. Each child is then placed relative to its parent from these
-                            // values, so the result does not depend on the order the motors are visited
-                            // in, nor on how deep the tree is.
-                            let model_positions: Vec<(u32, Option<Vec3>)>= motors.iter()
-                                .map(|mc| (mc.get_motor_model().id, mc.get_motor_model().relative_location)).collect();
-                            let model_position= |id: u32| model_positions.iter().find(|(motor_id, _)| *motor_id == id).and_then(|(_, p)| *p);
-                            for i in 0..motors.len() {
-                                // read only: this borrow of `motors` ends at the end of the line,
-                                // so the Vec is free again for the inner loop
-                                let parent_id= motors[i].get_motor_model().parent_id;
-                                let mut has_parent= false;
-                                for j in 0..motors.len() {
-                                    if j != i && motors[j].get_motor_model().id == parent_id {
-                                        // both elements are taken in ONE call: get_disjoint_mut checks that the
-                                        // indices differ, which is what allows two &mut into the same Vec.
-                                        // `j != i` above already guarantees the Ok branch.
-                                        if let Ok([mc, parent_mc])= motors.get_disjoint_mut([i, j]) {
-                                            // Step 2. a child's position is relative to its PARENT's origin, the frame
-                                            // the mixer composes it with: p_child - p_parent, both in the model frame.
-                                            // Bug #9 (fixed in brick 2): the subtraction acted on a copy and was
-                                            // dropped, so a rotor kept its model-frame position as if it were relative
-                                            // to its arm. The mixer then placed the rotors at (0, +/-0.48, 0.20)
-                                            // instead of (0, +/-0.30, 0.10), and delivered only 0.30 / 0.48 = 62.5 % of
-                                            // the demanded roll moment (measured: 0.626, runs A and B).
-                                            if let (Some(p_child), Some(p_parent))= (model_position(mc.get_motor_model().id), model_position(parent_mc.get_motor_model().id)) {
-                                                mc.set_motor_relative_location(p_child - p_parent);
-                                            }
-                                            parent_mc.add_child(mc.get_motor_model().id);
-                                            has_parent= true;
-                                        }
-                                    }
-                                }
-                                let mc= &mut motors[i];
-                                if has_parent == false {
-                                    mc.set_parent_id(0);
-                                }
-                                // the channel takes ownership of the value, and the motor has to stay
-                                // in `motors`: a clone is sent instead of the element itself
-                                
-                            }
-                            for i in 0..motors.len() {
-                                let mc= &motors[i];
-                                let _= mcs.send(mc.clone());
-                            }
+                        // 2c. recorded in its state (a non-finite value is refused), then published
+                        state.record_measurement(model, value, MotorStatus::RUNNING, Some(now));
+                        if let Some(mfs)= &motor_feedback_sender_cl && let Some(feedback)= &state.feedback {
+                            let _= mfs.send(feedback.clone());
                         }
-                        motors_initialized_cl.store(true, Ordering::Relaxed);
                     }
                 }
                 // every lock is released here: printing can no longer delay the control thread
@@ -680,65 +623,64 @@ impl Process for OspraiController {
             let sz= cmds_rcvr.len();
             for _ in 0..sz {
                 if let Ok(cmd)= cmds_rcvr.try_recv() {
-                    if let AnyMessage::MotorCommands(motor_cmds)= cmd {
-                        if let Ok(motors) = self.motors.clone().lock() {
-                            for motor_cmd in &motor_cmds {
-                                let mut idx= 0;
-                                //iterate over the id of motor in the actuator command sequence
-                                for id in self.motors_command_sequence.clone() {
-                                    //get the motor model of the motor in the command sequence
-                                    let mut model= None;
-                                    for i in 0..motors.len() {
-                                        let modl= motors[i].get_motor_model();
-                                        if modl.id == id as u32 {
-                                            model= Some(motors[i].get_motor_model());
+                    // the motors are read from the shared tree; not configured yet: nothing to convert
+                    if let AnyMessage::MotorCommands(motor_cmds)= cmd && let Some(tree)= self.motor_tree.get() {
+                        for motor_cmd in &motor_cmds {
+                            let mut idx= 0;
+                            //iterate over the id of motor in the actuator command sequence
+                            for id in self.motors_command_sequence.clone() {
+                                //get the motor model of the motor in the command sequence
+                                if let Some(motor_model) = tree.get(id as u32) {
+                                    if motor_cmd.command_type == MotorCommandType::THRUST as i32 &&  motor_model.is_thruster() {
+                                        if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
+                                            while idx >= actuator_setpoints.velocity.len() {
+                                                actuator_setpoints.velocity.push(0.0);
+                                            }
+                                            // thrust -> rotor speed: the MulticopterMotorModel is driven in rad/s
+                                            //      T = transmission * effort_constant * w^exp   =>   w = (T / (transmission * effort_constant))^(1/exp)
+                                            let setpoint_rot_speed= (motor_cmd.setpoint_value / (motor_model.transmission_factor * motor_model.effort_constant)).powf(1.0 / motor_model.exp_command_law as f64);
+                                            actuator_setpoints.velocity[idx] = setpoint_rot_speed;
                                             break;
+                                        } else {
+                                            idx+= 1;
+                                        }
+                                    } else if motor_cmd.command_type == MotorCommandType::VELOCITY as i32 &&  motor_model.is_thruster() {
+                                        if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
+                                            while idx >= actuator_setpoints.velocity.len() {
+                                                actuator_setpoints.velocity.push(0.0);
+                                            }
+                                            // velocity of a motor that produce thrust is already commanded in rad/s or tr/s: no conversion
+                                            actuator_setpoints.velocity[idx] = motor_cmd.setpoint_value;
+                                            break;
+                                        } else {
+                                            idx+= 1;
+                                        }
+                                    } else if motor_cmd.command_type == MotorCommandType::ANGULARPOSITION as i32 &&  motor_model.is_joint() {
+                                        if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
+                                            while idx >= actuator_setpoints.position.len() {
+                                                actuator_setpoints.position.push(0.0);
+                                            }
+                                            // a position-controlled joint is already commanded in radians: no conversion
+                                            actuator_setpoints.position[idx] = motor_cmd.setpoint_value;
+                                            break;
+                                        } else {
+                                            idx+= 1;
                                         }
                                     }
-                                    if let Some(motor_model) = model {
-                                        if motor_cmd.command_type == MotorCommandType::THRUST as i32 &&  motor_model.working_axis >= WorkingAxis::LinearMotionALongX as i32 {
-                                            if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
-                                                while idx >= actuator_setpoints.velocity.len() {
-                                                    actuator_setpoints.velocity.push(0.0);
-                                                }
-                                                // thrust -> rotor speed: the MulticopterMotorModel is driven in rad/s
-                                                //      T = transmission * effort_constant * w^exp   =>   w = (T / (transmission * effort_constant))^(1/exp)
-                                                let setpoint_rot_speed= (motor_cmd.setpoint_value / (motor_model.transmission_factor * motor_model.effort_constant)).powf(1.0 / motor_model.exp_command_law as f64);
-                                                actuator_setpoints.velocity[idx] = setpoint_rot_speed;
-                                                break;
-                                            } else {
-                                                idx+= 1;
-                                            }
-                                        } else if motor_cmd.command_type == MotorCommandType::VELOCITY as i32 &&  motor_model.working_axis >= WorkingAxis::LinearMotionALongX as i32 {
-                                            if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
-                                                while idx >= actuator_setpoints.velocity.len() {
-                                                    actuator_setpoints.velocity.push(0.0);
-                                                }
-                                                // velocity of a motor that produce thrust is already commanded in rad/s or tr/s: no conversion
-                                                actuator_setpoints.velocity[idx] = motor_cmd.setpoint_value;
-                                                break;
-                                            } else {
-                                                idx+= 1;
-                                            }
-                                        } else if motor_cmd.command_type == MotorCommandType::ANGULARPOSITION as i32 &&  motor_model.working_axis <= WorkingAxis::RotatingAroundZ as i32 {
-                                            if id == motor_cmd.id as u8 && id == motor_model.id as u8 {
-                                                while idx >= actuator_setpoints.position.len() {
-                                                    actuator_setpoints.position.push(0.0);
-                                                }
-                                                // a position-controlled joint is already commanded in radians: no conversion
-                                                actuator_setpoints.position[idx] = motor_cmd.setpoint_value;
-                                                break;
-                                            } else {
-                                                idx+= 1;
-                                            }
-                                        }
-                                    }
-                                }    
-                            }
+                                }
+                            }    
                         }
                         if let Some(motor_pub)= self.motors_command_publisher.as_mut() && 
                                 (actuator_setpoints.position.len() + actuator_setpoints.velocity.len() == self.motors_command_sequence.len()){
                             let _= motor_pub.publish(&actuator_setpoints);
+                            // the commands applied, kept in each motor's state
+                            if let Ok(mut motors)= self.motors.lock() {
+                                for motor_cmd in &motor_cmds {
+                                    if let Some(state)= motors.iter_mut().find(|state| state.id == motor_cmd.id) {
+                                        state.command= Some(motor_cmd.clone());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -783,3 +725,40 @@ impl Process for OspraiController {
 
 
 
+
+/// The OSPRAI's reference configuration file, `vehicles/osprai/motors.json`: the form a real
+/// robot's motor tree takes (`MotorTree::from_json`). Hand-predicted values: the tree this bridge
+/// discovers from the scene and the first `joint_state` message (ids are the byte-sums of the link
+/// names, positions come from the SDF, bounds and constants from `start_listening_topics`).
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use nalgebra::Vector3;
+    use robomorph::control::motion::motor_tree::ForceSubspace;
+
+    use super::*;
+
+    #[test]
+    fn the_reference_file_describes_the_discovered_osprai() {
+        // 1. the file, read and checked like any robot configuration
+        let path= Path::new(env!("CARGO_MANIFEST_DIR")).join("../vehicles/osprai/motors.json");
+        let tree= MotorTree::from_json(&path).unwrap();
+        // 2. the bridge's ids, parents first: the two arms, then the rotor each one carries
+        assert_eq!(tree.order(), &[74, 189, 64, 179]);
+        assert_eq!((tree.children(74), tree.children(189)), (&[64][..], &[179][..]));
+        // 3. at rest the rotors are where the SDF puts them, (0, +/-0.30, 0.10) from the model origin:
+        //    each one is given relative to its arm (fix #9)
+        let transforms= tree.transforms(Vec3::new(0.0, 0.0, 0.0), |_| 0.0);
+        for (id, y) in [(64, 0.30), (179, -0.30)] {
+            let location= Vector3::from(transforms[&id].location);
+            assert!((location - Vector3::new(0.0, y, 0.10)).norm() < 1e-12, "rotor {} at {:?}", id, location);
+        }
+        // 4. the rotors' bounds and constants: [0.1 N, k * 1200^2], spin signs of bug #12
+        let (left, right)= (tree.get(64).unwrap(), tree.get(179).unwrap());
+        assert_eq!((left.moment_constant, right.moment_constant), (-0.016, 0.016));
+        assert!(left.min_value == 0.1 && (left.max_value - 1.2e-5 * 1200f64.powi(2)).abs() < 1e-9, "{:?}", left);
+        // 5. S, the xz plane: a roll is refused, like in the scenario roll_refused
+        assert!(matches!(tree.force_subspace(), ForceSubspace::Plane(_)));
+    }
+}

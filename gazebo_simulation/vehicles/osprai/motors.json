@@ -1,0 +1,18 @@
+{
+  "motors": [
+    { "id": 74, "parent_id": 0, "working_axis": "RotatingAroundY",
+      "relative_location": [0.0, 0.18, 0.10], "relative_orientation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+      "min_value": -1.57, "max_value": 1.57, "max_rot_speed": 10.0 },
+    { "id": 64, "parent_id": 74, "working_axis": "LinearMotionALongZ",
+      "relative_location": [0.0, 0.12, 0.0], "relative_orientation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+      "min_value": 0.1, "max_value": 17.28, "max_rot_speed": 1200.0,
+      "effort_constant": 1.2e-5, "moment_constant": -0.016, "exp_command_law": 2, "transmission_factor": 1.0 },
+    { "id": 189, "parent_id": 0, "working_axis": "RotatingAroundY",
+      "relative_location": [0.0, -0.18, 0.10], "relative_orientation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+      "min_value": -1.57, "max_value": 1.57, "max_rot_speed": 10.0 },
+    { "id": 179, "parent_id": 189, "working_axis": "LinearMotionALongZ",
+      "relative_location": [0.0, -0.12, 0.0], "relative_orientation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+      "min_value": 0.1, "max_value": 17.28, "max_rot_speed": 1200.0,
+      "effort_constant": 1.2e-5, "moment_constant": 0.016, "exp_command_law": 2, "transmission_factor": 1.0 }
+  ]
+}

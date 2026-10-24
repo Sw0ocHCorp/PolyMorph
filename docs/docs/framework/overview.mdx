@@ -26,7 +26,7 @@ robomorph/src
 ├── core/scheduler.rs              Process, ProcessesPipeline, Scheduler
 ├── messages/
 │   ├── registered_message.rs      AnyMessage, MessageType, Vec3, UnitQuat, Translatable
-│   ├── motor_messages.rs          WorkVec, MotorModel, MotorFeedBack, MotorCommand, enums
+│   ├── motor_messages.rs          WorkVec, MotorModel, MotorFeedBack, MotorCommand, MotorState, enums
 │   ├── pose_messages.rs           Pose, IMUMeasurements, GNSSMeasurement, Transform
 │   └── lidar_messages.rs          LidarMeasurements, Ray
 ├── communications/
@@ -37,9 +37,12 @@ robomorph/src
     ├── joystick/                  RemoteControl, XboxPadControl (gilrs)
     └── motion/
         ├── motion_controller.rs   MotionController trait, VehicleKinematicConfig, GRAVITY
-        ├── motor_controller.rs    MotorController: effectiveness columns and work vectors
+        ├── motor.rs               what one motor computes: effectiveness column, work vector, state
+        ├── motor_tree.rs          MotorTree: the motor tree, configured once and shared; S
         ├── motors_mixer.rs        MotorsMixer: control allocation
-        └── attitude_controller.rs AttitudeController: attitude law
+        ├── attitude_controller.rs AttitudeController: attitude law
+        ├── velocity_controller.rs VelocityController: the force f_d
+        └── force_to_attitude_resolver.rs  ForceToAttitudeResolver: the attitude that makes f_d producible
 ```
 
 ## The execution model in one paragraph
@@ -50,6 +53,6 @@ Everything that runs periodically is a **`Process`**. Processes are grouped in a
 
 | Generic (in `robomorph`) | Vehicle-specific (in the binary) |
 |---|---|
-| control laws, allocation, motor model, scheduler, messages | the motor tree, mass / inertia / centre of mass, the effort law that converts to actuator units, topic names |
+| control laws, allocation, motor model and `MotorTree` (checks, order, `S`), scheduler, messages | the motor tree's data (discovered by the bridge, or a JSON file on the real robot), mass / inertia / centre of mass, the effort law that converts to actuator units, topic names |
 
 The boundary is strict and load-bearing: **the mixer works in efforts (newtons, radians) and knows nothing about rotor speeds.** The law `T = k·ωⁿ` and its inverse live in the vehicle controller, at the hardware boundary. Publishing newtons under a `VELOCITY` label would make the message lie about its own unit.

@@ -96,8 +96,8 @@ Planned compensation, **generic**: computed on the motor tree for every joint th
 
 ## Inputs, outputs, state
 
-- **Inputs**: `MotorController`s (configuration channel, once), `MotorFeedBack`s (feedback channel, every tick, published by the Gazebo `joint_state` callback), the wrench setpoint (pipe from the attitude stage).
-- **State**: the motor table and **the last setpoint** — held when nothing new arrives.
+- **Inputs**: the `MotorTree` (shared with the other stages, configured once), `MotorFeedBack`s (feedback channel, every tick, published by the Gazebo `joint_state` callback), the wrench setpoint (pipe from the attitude stage).
+- **State**: one `MotorState` per motor (its latest feedback, the command just emitted) and **the last setpoint** — held when nothing new arrives.
 - **Output**: `AnyMessage::MotorCommands` on the command channel.
 
 ## OSPRAI-specific validation oracle

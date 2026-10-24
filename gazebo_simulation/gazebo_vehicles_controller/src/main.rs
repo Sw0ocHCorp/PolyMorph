@@ -1,9 +1,9 @@
 pub mod vehicle_controllers;
 pub mod scenarios;
-use std::path::Path;
+use std::{path::Path, sync::{Arc, OnceLock}};
 
 use nalgebra::Matrix3;
-use robomorph::{communications::udp_interface::UdpInterface, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, force_to_attitude_resolver::ForceToAttitudeResolver, motion_controller::VehicleKinematicConfig, motors_mixer::MotorsMixer, velocity_controller::VelocityController}}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
+use robomorph::{communications::udp_interface::UdpInterface, control::{joystick::{joystick_controller::JoyStickController, xbox_pad_controller::XboxPadControl}, motion::{attitude_controller::AttitudeController, force_to_attitude_resolver::ForceToAttitudeResolver, motion_controller::VehicleKinematicConfig, motor_tree::SharedMotorTree, motors_mixer::MotorsMixer, velocity_controller::VelocityController}}, core::scheduler::{Process, Scheduler}, messages::registered_message::Vec3};
 use tokio::sync::broadcast::channel;
 use crate::{scenarios::{Cascade, player::ScenarioPlayer, recorder::Recorder}, vehicle_controllers::{osprai_controller::OspraiController, vehicle_controller::VehicleController}};
 
@@ -28,6 +28,8 @@ See docs/docs/simulation/running-scenarios.mdx.";
 ///     its consumer run in the same pass. Every other link uses a broadcast channel. The resolver
 ///     is there only when the scenario's `cascade` asks for it: any process may stand before the
 ///     attitude stage, as long as it fills the fields that stage reads;
+///   - ONE motor tree, shared by every stage that reads it (mixer, resolver): written once by the
+///     bridge when it has discovered the motors, so two stages can never hold different trees;
 ///   - `VehicleKinematicConfig` holds the TOTAL mass and inertia of the vehicle (base + arms +
 ///     rotors), taken from the SDF; the attitude time constant is a constructor argument of the
 ///     controller, not a field of the vehicle config.
@@ -117,14 +119,15 @@ fn main() {
     let (vehicle_telemetry_sender, _)= channel(5);
     let (mc_setpoint_sender, _)= channel(1);
     let (command_sender, _)= channel(1);
-    let (motor_config_sender, _)= channel(4);
     let (motor_feedback_sender, _)= channel(4);
+    //    the motor tree is not a channel: one slot, written once by the bridge, read by every stage
+    let motor_tree: SharedMotorTree= Arc::new(OnceLock::new());
 
     // 5. the wiring
-    //    5a. the vehicle bridge publishes the measured state, the motor tree and the feedbacks, and
-    //        applies the motor commands
+    //    5a. the vehicle bridge publishes the measured state and the feedbacks, writes the motor tree
+    //        once it has discovered it, and applies the motor commands
     osprai_controller.set_sender(vehicle_telemetry_sender.clone());
-    osprai_controller.set_motor_config_sender(motor_config_sender.clone());
+    osprai_controller.set_motor_tree(motor_tree.clone());
     osprai_controller.set_motor_feedback_sender(motor_feedback_sender.clone());
     osprai_controller.set_receiver(command_sender.subscribe());
     //    5b. the scenario player reads the simulated time from the telemetry and publishes the mission
@@ -133,19 +136,18 @@ fn main() {
     scenario_player.set_setpoint_sender(mc_setpoint_sender.clone());
     //    5c. the velocity stage needs no channel: the setpoint comes down the pipe, it adds the force
     //        and hands it on (a_d = 0 until brick 5). The resolver exists only when the scenario's
-    //        cascade includes it: it reads the motor tree on the configuration channel, to derive
-    //        the force subspace it can reach (no idle subscriber otherwise)
+    //        cascade includes it: it reads the force subspace from the motor tree
     let resolver= (scenario.cascade == Cascade::WithResolver).then(|| {
         let mut resolver= ForceToAttitudeResolver::new("force_to_attitude_resolver".to_string(), vehicle_config);
         resolver.set_period_from_freq(100);
-        resolver.set_motor_config_receiver(motor_config_sender.subscribe());
+        resolver.set_motor_tree(motor_tree.clone());
         resolver
     });
     //    5d. the attitude stage reads the pose; its setpoint comes from the pipe only, and its wrench
     //        goes to the mixer by the pipe
     attitude_controller.set_receiver(vehicle_telemetry_sender.subscribe());
     //    5e. the mixer reads the motor tree and the feedbacks, and publishes the motor commands
-    motor_mixer.set_motor_config_receiver(motor_config_sender.subscribe());
+    motor_mixer.set_motor_tree(motor_tree.clone());
     motor_mixer.set_motor_feedback_receiver(motor_feedback_sender.subscribe());
     motor_mixer.set_sender(command_sender.clone());
     //    5f. the recorder listens to the pose, the mission setpoint, the commands and the motor feedbacks
