@@ -13,7 +13,7 @@ use std::fs;
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
-use crate::scenarios::{Check, by_name};
+use crate::scenarios::{Check, EdgePrediction, by_name, velocity_component};
 
 /// Accepted mean simulated time between two control updates, relative to the nominal period T:
 /// [0.75 T, 1.25 T]. Over that range the predictions move by 1.2 points at most
@@ -23,6 +23,12 @@ use crate::scenarios::{Check, by_name};
 const PERIOD_RANGE: (f64, f64)= (0.75, 1.25);
 /// Longest accepted simulated gap between two control updates, in periods: one missed update at most.
 const MAX_GAP_PERIODS: f64= 2.0;
+/// Rounding margin (s) on a comparison of simulated times. A gap is the difference of two
+/// floating-point timestamps: 3.084 - 3.064 gives 0.020000000000000018, so a gap of exactly two
+/// periods, which the rule allows, would land just above its bound. The margin is far above that
+/// rounding (about 1e-14 s after 100 s of flight) and far below Gazebo's 1 ms step: a 21 ms gap is
+/// still refused.
+const TIME_TOLERANCE_S: f64= 1e-9;
 /// Lowest accepted altitude (m): below it the vehicle may touch the ground, a contact the
 /// predictions do not model.
 const MIN_ALTITUDE_M: f64= 0.5;
@@ -44,6 +50,10 @@ pub struct Row {
     pub roll_d: Option<f64>,
     /// Altitude of the vehicle origin, world z (m), from the odometry.
     pub pz: Option<f64>,
+    /// Measured velocity, world frame (m/s), from the odometry.
+    pub velocity: Option<Vector3<f64>>,
+    /// Velocity setpoint v_d, world frame (m/s); `None` in stabilize.
+    pub velocity_d: Option<Vector3<f64>>,
     /// Number of non-finite values in the row (measurements, setpoint, commands).
     pub non_finite: usize,
 }
@@ -79,6 +89,8 @@ pub fn parse(text: &str) -> Result<Recording, String> {
     let (i_t, i_fresh, i_roll, i_roll_d)= (index("t_sim_s")?, index("fresh")?, index("roll")?, index("roll_d")?);
     let (i_wall, i_pz)= (index("t_wall_s")?, index("pz")?);
     let (i_qw, i_qx, i_qy, i_qz)= (index("qw")?, index("qx")?, index("qy")?, index("qz")?);
+    let (i_vx, i_vy, i_vz)= (index("vx")?, index("vy")?, index("vz")?);
+    let (i_vd_x, i_vd_y, i_vd_z)= (index("vd_x")?, index("vd_y")?, index("vd_z")?);
     let i_commands= index("motor_cmds")?;
     // motor feedbacks: absent from recordings made before they were logged, hence optional
     let i_feedbacks= names.iter().position(|column| *column == "motor_fb");
@@ -108,11 +120,17 @@ pub fn parse(text: &str) -> Result<Recording, String> {
             },
             _ => None,
         };
+        // 3d. a vector: its three components, or none if one is missing
+        let vector= |(i, j, k): (usize, usize, usize)| match (value(i), value(j), value(k)) {
+            (Some(x), Some(y), Some(z)) => Some(Vector3::new(x, y, z)),
+            _ => None,
+        };
         let Some(t_sim_s)= value(i_t) else {
             return Err(format!("line {}: no simulated time", n + 3));
         };
         rows.push(Row { t_wall_s: value(i_wall).unwrap_or(f64::NAN), t_sim_s, fresh: fields[i_fresh] == "1", roll: value(i_roll), tilt,
-                        roll_d: value(i_roll_d), pz: value(i_pz), non_finite });
+                        roll_d: value(i_roll_d), pz: value(i_pz), velocity: vector((i_vx, i_vy, i_vz)),
+                        velocity_d: vector((i_vd_x, i_vd_y, i_vd_z)), non_finite });
     }
     return Ok(Recording { scenario, period_s, rows });
 }
@@ -176,6 +194,18 @@ pub fn roll_samples(rows: &[Row]) -> Vec<(f64, f64)> {
     return samples;
 }
 
+/// (simulated time, `axis` component of the measured velocity) of the rows that have a velocity, with
+/// strictly increasing times (a pass without a new pose is skipped, like `roll_samples`).
+pub fn velocity_samples(rows: &[Row], axis: usize) -> Vec<(f64, f64)> {
+    let mut samples: Vec<(f64, f64)>= Vec::new();
+    for row in rows {
+        if let Some(velocity)= row.velocity && samples.last().is_none_or(|(t, _)| row.t_sim_s > *t) {
+            samples.push((row.t_sim_s, velocity[axis]));
+        }
+    }
+    return samples;
+}
+
 /// The rows of the scripted part of the scenario, from its start (t = 0, the first row) to the end of
 /// its timeline. Rows recorded after it (controller left running, Gazebo paused or crashed) are not
 /// judged. A timeline held forever (`None`) keeps every row.
@@ -190,11 +220,28 @@ pub fn scenario_window(rows: &[Row], duration_s: Option<f64>) -> &[Row] {
     return &rows[..end];
 }
 
+/// True when the recording `rows` (all of it, not only the scenario window) reaches the end of the
+/// timeline. The player prints "finished" at the first pass whose scenario time reaches the duration,
+/// and the recorder writes that pass too: a recording stopped earlier would judge its check windows on
+/// part of them, or on nothing. A timeline held forever (`None`) has no end to reach.
+pub fn reaches_the_end(rows: &[Row], duration_s: Option<f64>) -> bool {
+    let Some(duration_s)= duration_s else {
+        return true;
+    };
+    return rows[rows.len() - 1].t_sim_s - rows[0].t_sim_s >= duration_s - TIME_TOLERANCE_S;
+}
+
 /// Simulated time between two consecutive CONTROL UPDATES, i.e. between two passes that received a
 /// new pose: (mean, max) in seconds, `None` with fewer than two updates. Passes without a new pose are
 /// skipped: they happen while Gazebo is stalled (rendering its sensors), the physics does not move
 /// during them, so they delay nothing in simulated time. What the predictions assume is one update
 /// per period of SIMULATED time.
+/// The longest gap between two control updates is accepted: at most one missed update, i.e.
+/// `MAX_GAP_PERIODS` periods, up to the rounding of the timestamps (`TIME_TOLERANCE_S`).
+pub fn gap_is_accepted(max_s: f64, period_s: f64) -> bool {
+    return max_s <= MAX_GAP_PERIODS * period_s + TIME_TOLERANCE_S;
+}
+
 pub fn control_update_gaps(rows: &[Row]) -> Option<(f64, f64)> {
     // 1. the simulated times of the passes that brought a new pose
     let updates: Vec<f64>= rows.iter().filter(|row| row.fresh).map(|row| row.t_sim_s).collect();
@@ -217,6 +264,67 @@ pub fn roll_edges(rows: &[Row]) -> Vec<(usize, f64)> {
         }
     }
     return edges;
+}
+
+/// The edges of the `axis` component of the velocity setpoint: (index of the first row carrying the
+/// new setpoint, new value).
+pub fn velocity_edges(rows: &[Row], axis: usize) -> Vec<(usize, f64)> {
+    let mut edges= Vec::new();
+    for i in 1..rows.len() {
+        if let (Some(before), Some(after))= (rows[i - 1].velocity_d, rows[i].velocity_d) && (after[axis] - before[axis]).abs() > 1e-9 {
+            edges.push((i, after[axis]));
+        }
+    }
+    return edges;
+}
+
+/// Judges the step responses of a setpoint: every edge, measured from its row to the next edge, against
+/// its prediction (`RollSteps`, `VelocitySteps`). `samples` gives the (time, value) of a slice of rows,
+/// `unit` and `scale` how a value is displayed. Without a tolerance the lines are information: never a
+/// FAIL. A missing measure or prediction makes the run invalid.
+fn judge_steps(rows: &[Row], t0_s: f64, edges: &[(usize, f64)], samples: impl Fn(&[Row]) -> Vec<(f64, f64)>,
+                tau_s: f64, predictions: &[EdgePrediction], tolerance: Option<f64>, unit: &str, scale: f64,
+                invalid: &mut bool, failed: &mut bool) {
+    for (n, (i_edge, target)) in edges.iter().enumerate() {
+        // samples of this edge: from the edge row to the next edge, strictly increasing times
+        let i_end= edges.get(n + 1).map(|(i, _)| *i).unwrap_or(rows.len());
+        let samples= samples(&rows[*i_edge..i_end]);
+        let (Some(measure), Some(prediction))= (measure_step(&samples, *target, tau_s), predictions.get(n)) else {
+            *invalid= true;
+            print_line(&format!("edge {}: not measurable, or no prediction", n + 1), "-".to_string(), "".to_string(), Some(false));
+            continue;
+        };
+        println!("  edge {} at t = {:.2} s: {:.1} -> {:.1} {}{}", n + 1, rows[*i_edge].t_sim_s - t0_s,
+                    samples[0].1 * scale, target * scale, unit, if tolerance.is_some() { "" } else { " (information, not judged)" });
+        for (k, (measured, predicted)) in measure.fractions.iter().zip(prediction.fractions.iter()).enumerate() {
+            let label= format!("  fraction covered at {} tau", k + 1);
+            match measured {
+                Some(measured) => {
+                    let ok= tolerance.map(|tolerance| (measured - predicted).abs() <= tolerance);
+                    *failed |= ok == Some(false);
+                    let expected= match tolerance {
+                        Some(tolerance) => format!("{:.1} % +/- {:.1}", predicted * 100.0, tolerance * 100.0),
+                        None => format!("{:.1} %", predicted * 100.0),
+                    };
+                    print_line(&label, format!("{:.1} %", measured * 100.0), expected, ok);
+                },
+                // the recording stops before k tau: incomplete
+                None => {
+                    *invalid= true;
+                    print_line(&label, "-".to_string(), "recording too short".to_string(), Some(false));
+                },
+            }
+        }
+        let ok= tolerance.map(|tolerance| measure.overshoot <= prediction.overshoot + tolerance);
+        *failed |= ok == Some(false);
+        let expected= match tolerance {
+            Some(tolerance) => format!("<= {:.1} %", (prediction.overshoot + tolerance) * 100.0),
+            None => format!("{:.1} %", prediction.overshoot * 100.0),
+        };
+        print_line("  overshoot", format!("{:.1} %", measure.overshoot * 100.0), expected, ok);
+        print_line("  2 % settling (information)",
+                    measure.settling_s.map(|s| format!("{:.2} s", s)).unwrap_or("not settled".to_string()), "-".to_string(), None);
+    }
 }
 
 /// One line of the report table. `ok`: `Some(false)` marks a failed line.
@@ -264,7 +372,7 @@ pub fn run(path: &str) -> i32 {
             print_line("simulated time per control update (mean)", format!("{:.2} ms", mean_s * 1e3),
                         format!("{:.1} to {:.1} ms", PERIOD_RANGE.0 * period_s * 1e3, PERIOD_RANGE.1 * period_s * 1e3), Some(ok));
             //    4b. no long hole: at most one missed update between two
-            let ok= max_s <= MAX_GAP_PERIODS * period_s;
+            let ok= gap_is_accepted(max_s, period_s);
             invalid |= !ok;
             print_line("longest simulated gap between two updates", format!("{:.2} ms", max_s * 1e3),
                         format!("<= {:.1} ms", MAX_GAP_PERIODS * period_s * 1e3), Some(ok));
@@ -297,6 +405,24 @@ pub fn run(path: &str) -> i32 {
         invalid |= !ok;
         print_line("roll edges recorded", format!("{}", edges.len()), format!("{}", expected_edges), Some(ok));
     }
+    for check in &scenario.checks {
+        if let Check::VelocitySteps { axis, .. }= check {
+            let expected_edges= scenario.segments.windows(2)
+                                    .filter(|pair| (velocity_component(&pair[0], *axis) - velocity_component(&pair[1], *axis)).abs() > 1e-9).count();
+            let recorded= velocity_edges(rows, *axis).len();
+            let ok= recorded == expected_edges;
+            invalid |= !ok;
+            print_line("velocity edges recorded", format!("{}", recorded), format!("{}", expected_edges), Some(ok));
+        }
+    }
+    //    4f. the recording reaches the end of the timeline: every check window is then complete. Read
+    //        on the whole recording, since the rows after the end are not in `rows`
+    if let Some(duration_s)= scenario.duration_s {
+        let ok= reaches_the_end(&recording.rows, scenario.duration_s);
+        invalid |= !ok;
+        let recorded_s= recording.rows[recording.rows.len() - 1].t_sim_s - t0_s;
+        print_line("end of the scenario recorded", format!("{:.2} s", recorded_s), format!(">= {:.2} s", duration_s), Some(ok));
+    }
 
     // 5. the checks
     println!("Checks {:>48}   {}", "measured", "predicted");
@@ -319,46 +445,22 @@ pub fn run(path: &str) -> i32 {
             // the roll steps: every edge of the setpoint (found in 4e), measured until the next one, against
             // the prediction for that edge. Without a tolerance the lines are information: never a FAIL
             Check::RollSteps { tau_s, edges: predictions, tolerance } => {
-                for (n, (i_edge, target)) in edges.iter().enumerate() {
-                    // samples of this edge: from the edge row to the next edge, strictly increasing times
-                    let i_end= edges.get(n + 1).map(|(i, _)| *i).unwrap_or(rows.len());
-                    let samples= roll_samples(&rows[*i_edge..i_end]);
-                    let (Some(measure), Some(prediction))= (measure_step(&samples, *target, *tau_s), predictions.get(n)) else {
-                        invalid= true;
-                        print_line(&format!("edge {}: not measurable, or no prediction", n + 1), "-".to_string(), "".to_string(), Some(false));
-                        continue;
-                    };
-                    println!("  edge {} at t = {:.2} s: {:.1} -> {:.1} deg{}", n + 1, rows[*i_edge].t_sim_s - t0_s,
-                                samples[0].1.to_degrees(), target.to_degrees(), if tolerance.is_some() { "" } else { " (information, not judged)" });
-                    for (k, (measured, predicted)) in measure.fractions.iter().zip(prediction.fractions.iter()).enumerate() {
-                        let label= format!("  fraction covered at {} tau", k + 1);
-                        match measured {
-                            Some(measured) => {
-                                let ok= tolerance.map(|tolerance| (measured - predicted).abs() <= tolerance);
-                                failed |= ok == Some(false);
-                                let expected= match tolerance {
-                                    Some(tolerance) => format!("{:.1} % +/- {:.1}", predicted * 100.0, tolerance * 100.0),
-                                    None => format!("{:.1} %", predicted * 100.0),
-                                };
-                                print_line(&label, format!("{:.1} %", measured * 100.0), expected, ok);
-                            },
-                            // the recording stops before k tau: incomplete
-                            None => {
-                                invalid= true;
-                                print_line(&label, "-".to_string(), "recording too short".to_string(), Some(false));
-                            },
-                        }
-                    }
-                    let ok= tolerance.map(|tolerance| measure.overshoot <= prediction.overshoot + tolerance);
-                    failed |= ok == Some(false);
-                    let expected= match tolerance {
-                        Some(tolerance) => format!("<= {:.1} %", (prediction.overshoot + tolerance) * 100.0),
-                        None => format!("{:.1} %", prediction.overshoot * 100.0),
-                    };
-                    print_line("  overshoot", format!("{:.1} %", measure.overshoot * 100.0), expected, ok);
-                    print_line("  2 % settling (information)",
-                                measure.settling_s.map(|s| format!("{:.2} s", s)).unwrap_or("not settled".to_string()), "-".to_string(), None);
-                }
+                judge_steps(rows, t0_s, &edges, roll_samples, *tau_s, predictions, *tolerance, "deg", 1.0f64.to_degrees(),
+                            &mut invalid, &mut failed);
+            },
+            // the velocity steps: the same measure on one component of the velocity and of its setpoint
+            Check::VelocitySteps { axis, tau_s, edges: predictions, tolerance } => {
+                judge_steps(rows, t0_s, &velocity_edges(rows, *axis), |slice| velocity_samples(slice, *axis), *tau_s, predictions,
+                            *tolerance, "m/s", 1.0, &mut invalid, &mut failed);
+            },
+            // the velocity held: maximum measured speed over the window
+            Check::HoldVelocity { from_s, to_s, max_speed } => {
+                let speed_max= rows.iter().filter(|row| row.t_sim_s - t0_s >= *from_s && row.t_sim_s - t0_s <= *to_s)
+                                        .filter_map(|row| row.velocity).map(|velocity| velocity.norm()).fold(f64::NAN, f64::max);
+                let ok= speed_max <= *max_speed;
+                failed |= !ok;
+                print_line(&format!("speed max, t in [{:.1} s, {:.1} s]", from_s, to_s.min(rows[rows.len() - 1].t_sim_s - t0_s)),
+                            format!("{:.3} m/s", speed_max), format!("<= {} m/s", max_speed), Some(ok));
             },
             // the roll held at a given time (end of a hold), interpolated between the two control
             // updates around it
@@ -434,7 +536,7 @@ mod tests {
     /// A row at simulated time `t_ms` (ms), with or without a new pose; the other fields do not
     /// matter for the validity functions.
     fn row(t_ms: f64, fresh: bool) -> Row {
-        Row { t_wall_s: 0.0, t_sim_s: t_ms / 1e3, fresh, roll: None, tilt: None, roll_d: None, pz: None, non_finite: 0 }
+        Row { t_wall_s: 0.0, t_sim_s: t_ms / 1e3, fresh, roll: None, tilt: None, roll_d: None, pz: None, velocity: None, velocity_d: None, non_finite: 0 }
     }
 
     #[test]
@@ -446,6 +548,46 @@ mod tests {
         let (mean_s, max_s)= control_update_gaps(&rows).unwrap();
         assert!((mean_s - 0.028 / 3.0).abs() < 1e-12, "mean {}", mean_s);
         assert!((max_s - 0.012).abs() < 1e-12, "max {}", max_s);
+    }
+
+    #[test]
+    fn velocity_edges_and_samples_follow_one_component() {
+        // 1. the y setpoint goes 0 -> 0.5 at the 2nd row and back to 0 at the 4th, the x one never
+        //    moves: two edges on y, none on x
+        let mut rows: Vec<Row>= [(0.0, 0.0), (10.0, 0.5), (20.0, 0.5), (30.0, 0.0)].iter()
+            .map(|(t_ms, vd_y)| Row { velocity: Some(Vector3::new(0.0, t_ms / 100.0, 0.0)), velocity_d: Some(Vector3::new(0.0, *vd_y, 0.0)),
+                                        ..row(*t_ms, true) }).collect();
+        assert_eq!(velocity_edges(&rows, 1), vec![(1, 0.5), (3, 0.0)]);
+        assert!(velocity_edges(&rows, 0).is_empty());
+        // 2. a stalled pass (same time) is skipped, like for the roll; the component is the one asked
+        rows.insert(2, Row { velocity: Some(Vector3::new(0.0, 9.0, 0.0)), ..row(10.0, false) });
+        assert_eq!(velocity_samples(&rows, 1), vec![(0.0, 0.0), (0.01, 0.1), (0.02, 0.2), (0.03, 0.3)]);
+    }
+
+    #[test]
+    fn a_gap_of_exactly_two_periods_is_accepted() {
+        // 1. the real case of a hover run: one missed update between 3.064 s and 3.084 s. The rule
+        //    allows one missed update (2 periods = 20 ms), but the difference of the two timestamps
+        //    is 0.020000000000000018 s, just above 0.02
+        let (_, max_s)= control_update_gaps(&[row(3064.0, true), row(3084.0, true)]).unwrap();
+        assert!(max_s > 0.02, "the rounding this test is about is gone: {:?}", max_s);
+        assert!(gap_is_accepted(max_s, 0.01), "a gap of 2 periods is refused: {:?}", max_s);
+        // 2. a real hole, 21 ms, is still refused
+        let (_, max_s)= control_update_gaps(&[row(3064.0, true), row(3085.0, true)]).unwrap();
+        assert!(!gap_is_accepted(max_s, 0.01), "a gap of 2.1 periods is accepted: {:?}", max_s);
+    }
+
+    #[test]
+    fn a_recording_stopped_before_the_end_is_incomplete() {
+        // 1. the real case of run velocity_hold1: the first pose at 4 ms, the controller stopped at
+        //    11.9 s of a 20 s scenario. Its check window [8 s, 20 s] would be judged on 3.9 s only
+        assert!(!reaches_the_end(&[row(4.0, true), row(11904.0, true)], Some(20.0)));
+        // 2. stopped 1 ms too early: still incomplete
+        assert!(!reaches_the_end(&[row(4.0, true), row(20003.0, true)], Some(20.0)));
+        // 3. the pass that sees the end (the player prints "finished" at it) is recorded: complete
+        assert!(reaches_the_end(&[row(4.0, true), row(20004.0, true)], Some(20.0)));
+        // 4. a timeline held forever (hover) has no end to reach
+        assert!(reaches_the_end(&[row(4.0, true), row(5000.0, true)], None));
     }
 
     #[test]

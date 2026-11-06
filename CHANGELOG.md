@@ -31,7 +31,50 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 ## [Unreleased]
 
 ---
-### 2026-10-29 — Velocity loop implemented
+### 2026-11-06 — Add the velocity scenarios to the test bench; fix the report's gap check
+
+#### Added
+- `Scenario`:
+  + scenario `velocity_hold` (S3): `v_d = 0` from Play on, through the resolver. Checks: tilt ≤ 0.5° from 1 s, speed ≤ 0.05 m/s from 8 s to 20 s
+  + scenario `velocity_step_y` (S4): `v_d = (0, 0.5, 0)` m/s from 3 s to 13 s, then 0 again, through the resolver. Checks: the fractions of the two edges at τ_v, 2τ_v, 3τ_v within ± 5 points of `docs/scripts/velocity_step_reference.py`, the overshoot, speed ≤ 0.05 m/s from 21 s to 24 s
+  + `Check::VelocitySteps` and `Check::HoldVelocity`, `velocity_component(...)`
+- `report.rs`:
+  + reads the measured velocity (`vx vy vz`) and its setpoint (`vd_*`): `velocity_samples(...)`, `velocity_edges(...)`
+  + `VelocitySteps`: the step measure of the roll, applied to one component of the velocity
+  + `HoldVelocity`: the highest measured speed over a window
+  + validity line "velocity edges recorded"
+  + validity line "end of the scenario recorded" (`reaches_the_end(...)`): a recording stopped before the end of its timeline is INVALID, instead of being judged on part of its check windows
+- Tests:
+  + the velocity scenarios go through the resolver with a velocity setpoint, one prediction per velocity edge
+  + velocity edges and samples follow one component, a gap of exactly 2 periods, a recording stopped before the end
+
+
+#### Changed
+- `Segment`:
+  + `velocity` is an `Option`: `None` when the velocity loop must not run (`hover`, `roll_step` and `roll_refused`, whose predictions are unchanged)
+- `report.rs`:
+  + `judge_steps(...)`: the judgement of the step responses, shared by `RollSteps` and `VelocitySteps`
+
+
+#### Fixed
+- `report.rs`: a gap of exactly 2 periods is accepted (`gap_is_accepted(...)`, with a margin `TIME_TOLERANCE_S = 1e-9 s` for the rounding of the time stamps). It made a valid `hover` run INVALID: the known issue of the motor tree commit
+
+
+#### Validation
+- `velocity_hold2`: PASS. Speed ≤ 0.027 m/s from 8 s, tilt ≤ 0.008°. The altitude settles **+4.01 cm** above the start, +4 cm predicted: with `v_d = 0`, the accumulated velocity error is the altitude lost
+- `velocity_step_y3`: PASS. Fractions 94.7 / 95.8 / 97.2 % and 95.3 / 96.5 / 97.7 %, against 95.3 / 96.0 / 97.4 % and 96.1 / 96.4 / 97.6 % predicted, no overshoot, 0.007 m/s from 21 s to 24 s
+- The first S4 prediction was wrong (105.9 / 110.6 / 105.2 %, 13.9 % of overshoot): it left out the roll the attitude loop loses against the drag moment (1.26° per m/s of sliding), which brakes like a second drag, 2.3 times the aerodynamic one. Corrected with parameters identified before the run, then confirmed on `velocity_step_y3`
+- Regression (no `v_d`): `hover4`, `roll_step4` (held roll 6.39°), `roll_refused4`: PASS
+
+
+#### Known issues
+- Brick 5b: no anti-windup yet (`integrate` is always true), no saturation of `v_d` nor of the tilt the velocity loop may ask for
+- The attitude loop loses roll against the drag moment while the vehicle slides: the velocity loop is over-damped, it reaches about 95 % of a step at τ_v and creeps to the target
+- The velocity stage holds its last measured velocity between two poses (with `dt = 0`), unlike the convention "measurements are not held for computing" (`conventions.mdx`): to be decided
+- `report.rs`: a check over an empty window prints `NaN … FAIL`, while the verdict is correctly INVALID
+
+
+### 2026-11-06 — Velocity loop implemented
 
 #### Added
 - `VelocityController`:

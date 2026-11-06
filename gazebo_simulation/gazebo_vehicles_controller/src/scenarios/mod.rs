@@ -8,9 +8,10 @@
 //!   - `report`:   reads a recording back, measures it and judges it against the predictions.
 //!
 //! The predictions below are computed for the tuning wired in `main.rs`: attitude tau = 0.2 s,
-//! zeta = 1, processes pipeline at 100 Hz (T = 10 ms), and for the OSPRAI as identified in free flight
-//! by `docs/scripts/identify_vehicle.py`. Change one of them and the predictions must be recomputed
-//! with `docs/scripts/delay_budget_reference.py`. The predictions are DATA of the catalogue: the
+//! zeta = 1, velocity tau_v = 2 s, zeta = 1, processes pipeline at 100 Hz (T = 10 ms), and for the
+//! OSPRAI as identified in free flight by `docs/scripts/identify_vehicle.py`. Change one of them and
+//! the predictions must be recomputed with `docs/scripts/delay_budget_reference.py` (roll) and
+//! `docs/scripts/velocity_step_reference.py` (velocity). The predictions are DATA of the catalogue: the
 //! checks themselves know nothing about the vehicle.
 
 use nalgebra::{UnitQuaternion, Vector3};
@@ -22,7 +23,7 @@ pub mod recorder;
 pub mod report;
 
 /// Names accepted by `by_name`, for the command-line help.
-pub const NAMES: [&str; 3]= ["hover", "roll_step", "roll_refused"];
+pub const NAMES: [&str; 5]= ["hover", "roll_step", "roll_refused", "velocity_hold", "velocity_step_y"];
 
 /// One piece of a timeline: from `start_s` on, the setpoint is constant. Timelines are piecewise
 /// constant (steps only), which is exactly what a step response needs.
@@ -33,9 +34,9 @@ pub struct Segment {
     /// q_d, the attitude setpoint body->world. Read by the attitude stage today; it becomes the
     /// heading preference q_pref of the resolver in brick 3.
     pub orientation: UnitQuaternion<f64>,
-    /// v_d, the velocity setpoint in the WORLD frame (m/s) [P7]. Read by the velocity loop (brick 5),
-    /// ignored in stabilize.
-    pub velocity: Vector3<f64>,
+    /// v_d, the velocity setpoint in the WORLD frame (m/s) [P7], read by the velocity loop. `None`:
+    /// stabilize, the loop does not run and only the weight is carried.
+    pub velocity: Option<Vector3<f64>>,
 }
 
 /// A prediction the report checks, written down BEFORE the run [P10].
@@ -55,6 +56,18 @@ pub enum Check {
     /// integrator, so a constant disturbing moment (the drag of a sliding vehicle) leaves a steady
     /// error that the reference model predicts.
     HoldRoll { at_s: f64, expected_deg: f64, tolerance_deg: f64 },
+    /// Every edge of one component of the velocity setpoint (`axis`: 0 = x, 1 = y, 2 = z, world
+    /// frame) is a step response of the velocity loop, measured and judged like `RollSteps`, with
+    /// `tau_s` = tau_v.
+    VelocitySteps { axis: usize, tau_s: f64, edges: Vec<EdgePrediction>, tolerance: Option<f64> },
+    /// The measured speed |v| (world, m/s) stays below `max_speed` between `from_s` and `to_s`
+    /// (scenario time): the velocity loop holds v_d = 0.
+    HoldVelocity { from_s: f64, to_s: f64, max_speed: f64 },
+}
+
+/// The `axis` component of a segment's velocity setpoint (m/s), 0 without one (stabilize).
+pub fn velocity_component(segment: &Segment, axis: usize) -> f64 {
+    return segment.velocity.map_or(0.0, |velocity| velocity[axis]);
 }
 
 /// What the reference model predicts for one edge of a step: fraction of the step covered at tau,
@@ -108,7 +121,7 @@ impl Scenario {
         let mut setpoint= Pose::default();
         setpoint.orientation= Some(UnitQuat::from(active.orientation));
         setpoint.imu_measurement= Some(IMUMeasurements { a_velocity: Some(Vec3::new(0.0, 0.0, 0.0)), ..Default::default() });
-        setpoint.l_velocity= Some(Vec3(active.velocity));
+        setpoint.l_velocity= active.velocity.map(Vec3);
         return setpoint;
     }
 
@@ -128,12 +141,13 @@ pub fn by_name(name: &str) -> Option<Scenario> {
     let hover_tilt= |to_s: f64| Check::HoverTilt { from_s: 1.0, to_s, max_tilt_deg: 0.5 };
     match name {
         // S0: hold level forever. The default scenario, i.e. the former fixed setpoint of the bridge
-        //     (identity attitude), with v_d = 0 instead of the old unused (0, 0, 1).
+        //     (identity attitude), without a velocity setpoint: stabilize, the velocity loop does
+        //     not run.
         "hover" => Some(Scenario {
             name: "hover",
             description: "S0: hold level, forever",
             cascade: Cascade::AttitudeOnly,
-            segments: vec![Segment { start_s: 0.0, orientation: level, velocity: Vector3::zeros() }],
+            segments: vec![Segment { start_s: 0.0, orientation: level, velocity: None }],
             duration_s: None,
             checks: vec![hover_tilt(f64::INFINITY)],
         }),
@@ -160,9 +174,9 @@ pub fn by_name(name: &str) -> Option<Scenario> {
             // the attitude stage alone: through the resolver the roll would be refused (see S2)
             cascade: Cascade::AttitudeOnly,
             segments: vec![
-                Segment { start_s: 0.0, orientation: level,  velocity: Vector3::zeros() },
-                Segment { start_s: 3.0, orientation: rolled, velocity: Vector3::zeros() },
-                Segment { start_s: 6.0, orientation: level,  velocity: Vector3::zeros() },
+                Segment { start_s: 0.0, orientation: level,  velocity: None },
+                Segment { start_s: 3.0, orientation: rolled, velocity: None },
+                Segment { start_s: 6.0, orientation: level,  velocity: None },
             ],
             duration_s: Some(9.0),
             checks: vec![
@@ -188,6 +202,64 @@ pub fn by_name(name: &str) -> Option<Scenario> {
             cascade: Cascade::WithResolver,
             checks: vec![hover_tilt(9.0)],
             ..s1
+        }),
+        // S3: hold v_d = 0 from Play on, through the resolver: the velocity loop's first run. The
+        //     rotors start at rest, so the vehicle first sinks (-0.36 m/s measured in stabilize) before
+        //     its thrust builds up; the loop then brings the speed back to 0, and its integral absorbs
+        //     the ~0.1 % thrust surplus that makes a stabilized vehicle climb. The altitude comes back
+        //     to the spawn point (information): the integral of the error v_d - v = -v IS the
+        //     altitude lost, and it ends where it cancels the surplus, ki I = -0.0098 m/s^2, i.e.
+        //     I = -0.04 m: the vehicle settles about 4 cm ABOVE the spawn point, whatever the sink.
+        //     Prediction (the PI of tau_v = 2 s from -0.36 m/s at 0.25 s): |v| = 0.023 m/s at 8 s,
+        //     0.011 m/s at 10 s. The check, |v| <= 0.05 m/s from 8 s to the end, leaves room for the
+        //     start-up transient, which depends on the rotor spin-up; and the tilt stays below the S0
+        //     bound all along (no lateral demand).
+        "velocity_hold" => Some(Scenario {
+            name: "velocity_hold",
+            description: "S3: hold v_d = 0 from Play on, through the resolver",
+            cascade: Cascade::WithResolver,
+            segments: vec![Segment { start_s: 0.0, orientation: level, velocity: Some(Vector3::zeros()) }],
+            duration_s: Some(20.0),
+            checks: vec![
+                hover_tilt(20.0),
+                Check::HoldVelocity { from_s: 8.0, to_s: 20.0, max_speed: 0.05 },
+            ],
+        }),
+        // S4: a lateral velocity step, through the resolver: v_d = (0, 0.5, 0) m/s from 3 s to 13 s,
+        //     then 0 again, end at 24 s. The chain velocity -> resolver -> attitude -> mixer: the
+        //     loop asks for a lateral force, the resolver rolls the OSPRAI by about -atan(a_d / g)
+        //     (first a_d = kp 0.5 = 0.5 m/s^2, -2.9 deg), the tilted thrust accelerates it.
+        //     Predictions: docs/scripts/velocity_step_reference.py (the PI with one tick of delay,
+        //     the attitude loop as a second order of 0.2 s, the identified lateral drag 0.1122 N per
+        //     m/s, and the roll the attitude loop fails to hold against the drag moment, 1.26 deg per
+        //     m/s of sliding): edge 1 95.3 / 96.0 / 97.4 % at tau_v / 2 tau_v / 3 tau_v, no overshoot;
+        //     edge 2 96.1 / 96.4 / 97.6 %, no overshoot. That lost roll brakes like a second drag,
+        //     2.3 times the aerodynamic one: the loop is overdamped, it rises fast to ~95 % then creeps
+        //     to the target while the integral asks for the missing roll. The textbook PI (`--ideal`)
+        //     would give 100 / 113.6 / 109.9 %, and the first prediction, without the lost roll,
+        //     105.9 / 110.6 / 105.2 % with 13.9 % of overshoot: run velocity_step_y1 measured
+        //     94.7 / 95.7 / 97.1 % and 95.3 / 96.6 / 97.7 %, no overshoot (stopped at 19 s, invalid,
+        //     but its edges were complete). The tolerance, 5 points: the measured roll error (1.41
+        //     instead of 1.26 deg per m/s) moves the fractions by about 1 point, the rotor lag and the
+        //     roll -> yaw -> arms coupling by a few. After the second edge the speed is held below
+        //     0.05 m/s from 21 s (model: 0.007 m/s).
+        "velocity_step_y" => Some(Scenario {
+            name: "velocity_step_y",
+            description: "S4: lateral velocity step of 0.5 m/s at 3 s, back to 0 at 13 s, through the resolver",
+            cascade: Cascade::WithResolver,
+            segments: vec![
+                Segment { start_s: 0.0,  orientation: level, velocity: Some(Vector3::zeros()) },
+                Segment { start_s: 3.0,  orientation: level, velocity: Some(Vector3::new(0.0, 0.5, 0.0)) },
+                Segment { start_s: 13.0, orientation: level, velocity: Some(Vector3::zeros()) },
+            ],
+            duration_s: Some(24.0),
+            checks: vec![
+                Check::VelocitySteps { axis: 1, tau_s: 2.0, tolerance: Some(0.05), edges: vec![
+                    EdgePrediction { fractions: [0.953, 0.960, 0.974], overshoot: 0.0 },
+                    EdgePrediction { fractions: [0.961, 0.964, 0.976], overshoot: 0.0 },
+                ]},
+                Check::HoldVelocity { from_s: 21.0, to_s: 24.0, max_speed: 0.05 },
+            ],
         }),
         _ => None,
     }
@@ -223,8 +295,8 @@ mod tests {
         assert!(roll_at(&scenario, 6.0).abs() < 1e-12);
         assert!(roll_at(&scenario, 100.0).abs() < 1e-12);
         assert!(!scenario.is_finished(8.99) && scenario.is_finished(9.0));
-        // 4. the velocity setpoint is zero and present (Some), never missing
-        assert_eq!(scenario.setpoint_at(4.0).l_velocity.map(|v| v.norm()), Some(0.0));
+        // 4. no velocity setpoint: stabilize, the velocity loop does not run
+        assert_eq!(scenario.setpoint_at(4.0).l_velocity, None);
     }
 
     #[test]
@@ -234,6 +306,37 @@ mod tests {
         let (s1, s2)= (by_name("roll_step").unwrap(), by_name("roll_refused").unwrap());
         assert_eq!((s1.cascade, s2.cascade), (Cascade::AttitudeOnly, Cascade::WithResolver));
         assert!(matches!(s2.checks.as_slice(), [Check::HoverTilt { from_s, to_s, .. }] if *from_s == 1.0 && *to_s == 9.0));
+    }
+
+    #[test]
+    fn the_velocity_scenarios_go_through_the_resolver_with_a_velocity_setpoint() {
+        // the velocity loop asks for lateral forces: without the resolver, the OSPRAI would be asked
+        // for a force it cannot produce (a body y force), and the integral would wind up
+        for name in ["velocity_hold", "velocity_step_y"] {
+            let scenario= by_name(name).unwrap();
+            assert_eq!(scenario.cascade, Cascade::WithResolver, "scenario {}", name);
+            assert!(scenario.segments.iter().all(|segment| segment.velocity.is_some()), "scenario {}", name);
+        }
+        // the step: 0.5 m/s along y between 3 s and 13 s, 0 before and after
+        let step= by_name("velocity_step_y").unwrap();
+        assert_eq!(step.setpoint_at(2.99).l_velocity, Some(Vec3::new(0.0, 0.0, 0.0)));
+        assert_eq!(step.setpoint_at(3.0).l_velocity, Some(Vec3::new(0.0, 0.5, 0.0)));
+        assert_eq!(step.setpoint_at(13.0).l_velocity, Some(Vec3::new(0.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn every_velocity_edge_has_a_prediction() {
+        // one prediction per change of the judged component of the velocity setpoint
+        for name in NAMES {
+            let scenario= by_name(name).unwrap();
+            for check in &scenario.checks {
+                if let Check::VelocitySteps { axis, edges: predictions, .. }= check {
+                    let edges= scenario.segments.windows(2)
+                                    .filter(|pair| (velocity_component(&pair[0], *axis) - velocity_component(&pair[1], *axis)).abs() > 1e-9).count();
+                    assert_eq!(predictions.len(), edges, "scenario {}", name);
+                }
+            }
+        }
     }
 
     #[test]
