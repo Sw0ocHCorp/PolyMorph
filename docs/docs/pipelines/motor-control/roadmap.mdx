@@ -1,21 +1,24 @@
 # Roadmap: the remaining stages
 
-Build order, validated in design: attitude (done) → velocity loop → force→attitude resolver → position loop. Each stage introduces only two or three new symbols; the skeleton (error → desired acceleration → conversion by `m` or `I` at the end of the law) never changes.
+Build order: attitude (done) → force→attitude resolver (done, aerial vehicles) → velocity loop (brick 5, in progress) → position loop. Each stage introduces only two or three new symbols; the skeleton (error → desired acceleration → conversion by `m` or `I` at the end of the law) never changes.
 
 ## Velocity loop
 
 ```
-a_d = kp_v·(v_d − v) + ki·∫(v_d − v)dt        (m/s², world frame)
+a_d = kp·(v_d − v) + ki·∫(v_d − v)dt          (m/s², world frame)
 f_d = m·a_d + (0, 0, m·g)                     (N, world frame)
+kp = 2ζ/τ_v,   ki = 1/τ_v²
 ```
 
 | Symbol | What it is | Type | Unit / frame |
 |---|---|---|---|
-| `v` | measured linear velocity | 3-vector | m/s, world |
-| `v_d` | desired linear velocity, from the position loop | 3-vector | m/s, world |
+| `v` | measured linear velocity, read in `Pose.l_velocity` of the **telemetry** | 3-vector | m/s, world |
+| `v_d` | desired linear velocity, read in `Pose.l_velocity` of the **setpoint** coming down the pipe (the mission today, the position loop later). Same field name as `v`, in another message | 3-vector | m/s, world |
 | **`a_d`** | **desired linear acceleration — the law's output, a decision, not a measurement** | 3-vector | m/s², world |
-| `f_d` | desired force handed to the resolver | 3-vector | N, world |
-| `kp_v = 1/τ_v`, `ki` | proportional and integral gains | scalars | 1/s, 1/s² |
+| `f_d` | desired force handed to the resolver, written in `Pose.force` of the setpoint | 3-vector | N, world |
+| `τ_v` | time constant of the velocity loop (`time_constant` in `VelocityController::new`) | scalar | s |
+| `ζ` | damping ratio, 1 = critical (`damping_factor` in `VelocityController::new`) | scalar | — |
+| `kp`, `ki` | proportional and integral gains, derived from `τ_v` and `ζ`, never set by hand | scalars | 1/s, 1/s² |
 | `m` | vehicle mass (`VehicleKinematicConfig::weight`) | scalar | kg |
 
 `a_d` is the exact linear twin of `α` in the attitude loop — the same skeleton one level up:
@@ -28,11 +31,23 @@ f_d = m·a_d + (0, 0, m·g)                     (N, world frame)
 
 > `a_d` is **not** the accelerometer reading. `Pose.imu_measurement.l_accel` is a measured specific force; `a_d` is a computed decision. They are never compared: there is no acceleration feedback loop anywhere in the cascade. The `+ (0, 0, m·g)` term is the gravity feedforward — the total force is the one that produces the wanted acceleration **plus** the one that cancels the weight.
 
-- Same structure as attitude, one level up, in the **world** frame — where velocity means something, and where Gazebo's odometry provides it. `kp_v = 1/τ_v`, with `τ_v ≈ 5–10 × τ_attitude`.
+- Same structure as attitude, one level up, in the **world** frame — where velocity means something, and where Gazebo's odometry provides it. `τ_v ≈ 5–10 × τ_attitude`, so that the attitude loop has reached the tilt the velocity loop asks for long before the velocity changes (time-scale separation).
+- **The gains**, `kp = 2ζ/τ_v` and `ki = 1/τ_v²`, give the closed loop `s² + (2ζ/τ_v)·s + 1/τ_v²`: the same poles as the attitude loop, plus a zero from the proportional term. At ζ = 1 a velocity step is covered at **100 % at τ_v** and overshoots by **13.5 % at 2τ_v**, then settles ([why the zero makes it overshoot](../../math/cascaded-control.mdx#explore-it)). That is for a vehicle whose acceleration is exactly the force asked for. On the OSPRAI, the attitude loop loses roll against the drag moment while the vehicle slides, which brakes like a second drag: the loop is over-damped, rises to about 95 % at τ_v and creeps to the target without overshoot ([scenario `velocity_step_y`](../../simulation/running-scenarios.mdx#the-velocity-scenarios-brick-5a)).
 - **The cascade's only integrator lives here**: this is the stage that sees the constant biases (wind, mis-estimated mass, thrust that does not match its model). Its first job is already quantified: the roughly 0.1 % of weight discrepancy between the `k·ω²` model and Gazebo's real thrust, visible in stabilize as a slow constant-acceleration climb.
-- **Anti-windup by conditional integration**: accumulate only when the mixer reports the demand is serviceable. Its residual and its clamping already carry that information inside `compute_command_law`; it is worth surfacing in the return message.
-- The gravity feedforward already lives here: since brick 3 the velocity stage outputs `f_d = m·(a_d + g·ẑ)` with `a_d = 0`, and the attitude stage only rotates `f_d` into the body frame. The velocity loop replaces `a_d = 0` by its law.
-- Saturate the incoming `v_d` to the vehicle's maximum speed.
+- **The integral runs on the simulated time**: `dt` is the difference between the time stamps of two measured poses, never the wall clock of the scheduler. When Gazebo stalls, the same pose comes back and `dt = 0`: the physics did not move, the integral does not either.
+- The gravity feedforward lives here: the velocity stage outputs `f_d = m·(a_d + g·ẑ)`, and the attitude stage only rotates `f_d` into the body frame.
+
+**Built (brick 5a).** `VelocityController`, with the generic `PIDController<Vec3>` (one PI per world axis, computed component by component).
+- `main.rs` wires `τ_v = 2 s` (10 × `τ_attitude`) and `ζ = 1`, so `kp = 1 /s` and `ki = 0.25 /s²`. A run at `τ_v = 1 s` comes next.
+- **The loop runs only when the setpoint carries `v_d`** (`l_velocity` is `Some`). Without it (stabilize), `a_d = 0` and the integral is cleared, so the loop starts again from zero when a `v_d` comes back. There is no mode flag: a loop at rest outputs the weight alone.
+- Before the first measured velocity, `a_d = 0` too: no regulation blind, but the weight is still carried.
+- The measured velocity is held between two poses; the first pose integrates nothing (no previous time stamp).
+- The scenarios `velocity_hold` and `velocity_step_y` test it ([running scenarios](../../simulation/running-scenarios.mdx#the-catalogue)).
+
+**Pending (brick 5b).**
+- **Anti-windup by conditional integration.** `PIDController::compute_output` already takes an `integrate` flag, given at every call: the PI cannot know that the stages below saturate, the velocity stage can. Brick 5b will freeze the integral only while the stage saturates its own output **and** the error pushes further into the saturation; an error that pulls back out must still be integrated.
+- Saturate the incoming `v_d` to the vehicle's maximum speed, and the tilt the loop may ask for.
+- A step along x: on the OSPRAI a force along x tilts the arms, which also produces a pitch moment (`My = h·Fx`, see [the resolver's limit](resolver.mdx)).
 
 ## Force → attitude resolver
 

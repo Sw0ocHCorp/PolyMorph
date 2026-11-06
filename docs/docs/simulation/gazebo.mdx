@@ -46,7 +46,9 @@ On every `exec`, the mixer's `MotorCommand`s are converted into the actuator's u
 
 Until bug #1 the odometry quaternion's x, y, z components were used as three Euler angles, which is not a rotation of the vehicle at all.
 
-Before the first sample, `timestamp`, `l_velocity` and `relative_location` are `None` (P3), never a zero: a consumer abstains rather than reading a fake "at rest at the origin". The lidar, the cameras and the motor feedbacks are still stamped with the wall clock, because nothing reads those stamps yet.
+Before the first sample, `timestamp`, `l_velocity` and `relative_location` are `None` (P3), never a zero: a consumer abstains rather than reading a fake "at rest at the origin".
+
+The **first** odometry message gives its position and its time stamp, but not its velocity: `l_velocity` stays `None` until the second one. The odometry publisher computes the velocity by differentiating the pose, and its first sample very likely differentiates the spawn pose against the world origin: 20 m of spawn height in a few milliseconds, a vertical velocity of thousands of m/s (6666 m/s, 20 m in 3 ms, in one recording). The velocity loop would have turned it into a huge downward force for one pass, hence an upside-down attitude setpoint. The lidar, the cameras and the motor feedbacks are still stamped with the wall clock, because nothing reads those stamps yet.
 
 The bridge **no longer publishes a setpoint**: it only measures and actuates. The mission setpoint comes from the scenario player, the single source of setpoints (see [Running scenarios](./running-scenarios.mdx)).
 

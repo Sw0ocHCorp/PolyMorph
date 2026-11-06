@@ -43,7 +43,8 @@
 | `τ` | closed-loop time constant; error envelope decays as `e^(−t/τ)` | s |
 | `ζ` | damping ratio (1 = critical) | — |
 | `kp = 1/τ²`, `kd = 2ζ/τ` | derived attitude gains, never stored separately | 1/s², 1/s |
-| `kp_v = 1/τ_v`, `ki` | velocity-loop proportional and integral gains | 1/s, 1/s² |
+| `τ_v` | time constant of the velocity loop | s |
+| `kp = 2ζ/τ_v`, `ki = 1/τ_v²` | derived velocity-loop gains, proportional and integral, never set by hand | 1/s, 1/s² |
 | `kp_p = 1/τ_p` | position-loop proportional gain | 1/s |
 | `z_d` | desired body z axis, `f_d/‖f_d‖`, expressed in the world | — |
 | `q_pref` | attitude **preference** from the external mission setpoint; honoured only in the free DOF | — |

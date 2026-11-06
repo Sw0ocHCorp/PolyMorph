@@ -267,6 +267,8 @@ impl VehicleController for OspraiController {
             // frame [P7] - which the velocity loop will consume. The attitude stays the IMU's: the
             // odometry quaternion is only used here, to bring the velocity into the world, and it
             // remains the judge of the frame-convention tests (cross-check the IMU against it).
+            // The callback owns `first_message` (subscribe takes an FnMut): see step 2.
+            let mut first_message= true;
             let _= node.subscribe("/model/osprai/odometry", move |msg: Odometry| {
                 if verbose {
                     println!("[INFO] -> True pose= {:?}", msg.pose);
@@ -280,8 +282,18 @@ impl VehicleController for OspraiController {
                     //    rotating it by q_odom gives the velocity in the WORLD frame [P7].
                     //    Bug #1 was here: the x/y/z components of the quaternion were used as three
                     //    Euler angles, which is not a rotation of the vehicle at all.
-                    let v_body= Vector3::new(msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z);
-                    telemetry_state.pose_state.l_velocity= Some(Vec3(q_odom * v_body));
+                    //    The FIRST message is skipped: the OdometryPublisher computes its velocity by
+                    //    differentiating the pose, and for its first sample the previous pose is (very
+                    //    likely) the world origin, not the spawn point. The 20 m of the spawn height
+                    //    divided by a few ms gives a vertical velocity of thousands of m/s (6666 m/s,
+                    //    i.e. 20 m in 3 ms, seen in a recording), which the velocity loop would turn into
+                    //    a huge downward force for one pass.
+                    //    l_velocity stays None until the second message: its consumers abstain.
+                    if !first_message {
+                        let v_body= Vector3::new(msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z);
+                        telemetry_state.pose_state.l_velocity= Some(Vec3(q_odom * v_body));
+                    }
+                    first_message= false;
                     // 3. position of the model origin, already in the world frame (m)
                     telemetry_state.pose_state.relative_location= Some(Vec3::new(msg.pose.position.x, msg.pose.position.y, msg.pose.position.z));
                     // 4. the state is now as recent as this sample: stamp it with its SIMULATED time

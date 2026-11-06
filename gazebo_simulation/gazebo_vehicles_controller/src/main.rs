@@ -31,10 +31,11 @@ See docs/docs/simulation/running-scenarios.mdx.";
 ///   - ONE motor tree, shared by every stage that reads it (mixer, resolver): written once by the
 ///     bridge when it has discovered the motors, so two stages can never hold different trees;
 ///   - `VehicleKinematicConfig` holds the TOTAL mass and inertia of the vehicle (base + arms +
-///     rotors), taken from the SDF; the attitude time constant is a constructor argument of the
-///     controller, not a field of the vehicle config.
-/// Stabilize mode: the velocity stage's law is a_d = 0 until brick 5, so its force f_d = (0, 0, m g)
-/// is the weight compensation. The resolver is in the cascade only when the scenario asks for it
+///     rotors), taken from the SDF; the attitude and velocity time constants are constructor
+///     arguments of their controllers, not fields of the vehicle config. tau_v = 2 s = 10 x
+///     tau_attitude: the velocity loop is slow enough for the attitude to follow it;
+///   - the velocity loop runs only when the scenario gives a desired velocity v_d: without one
+///     (stabilize), its force f_d = (0, 0, m g) is the weight compensation. The resolver is in the cascade only when the scenario asks for it
 /// (`Scenario::cascade`): a roll preference with a vertical force is refused by it, by design.
 fn main() {
     // 1. the command line
@@ -86,7 +87,7 @@ fn main() {
     let mut remote_controller= XboxPadControl::new("remote_controller".to_string(), 5);
     let mut udp_interface= UdpInterface::new("127.0.0.1", 8080, "127.0.0.1", 8090, 10);
     let mut scenario_player= ScenarioPlayer::new("scenario_player".to_string(), scenario.clone());
-    let mut velocity_controller= VelocityController::new("velocity_controller".to_string(), vehicle_config);
+    let mut velocity_controller= VelocityController::new("velocity_controller".to_string(), vehicle_config, 2.0, 1.0);
     let mut attitude_controller= AttitudeController::new("attitude_controller".to_string(), vehicle_config, 0.2, 1.0);
     let mut motor_mixer= MotorsMixer::new("motor_mixer".to_string(), vehicle_config.clone());
     let mut osprai_controller= OspraiController::default();
@@ -134,9 +135,10 @@ fn main() {
     //        setpoint (attitude preference, desired velocity)
     scenario_player.set_receiver(vehicle_telemetry_sender.subscribe());
     scenario_player.set_setpoint_sender(mc_setpoint_sender.clone());
-    //    5c. the velocity stage needs no channel: the setpoint comes down the pipe, it adds the force
-    //        and hands it on (a_d = 0 until brick 5). The resolver exists only when the scenario's
-    //        cascade includes it: it reads the force subspace from the motor tree
+    //    5c. the velocity stage reads the measured velocity from the telemetry; its setpoint (v_d)
+    //        comes down the pipe, it adds the force and hands it on. The resolver exists only when
+    //        the scenario's cascade includes it: it reads the force subspace from the motor tree
+    velocity_controller.set_receiver(vehicle_telemetry_sender.subscribe());
     let resolver= (scenario.cascade == Cascade::WithResolver).then(|| {
         let mut resolver= ForceToAttitudeResolver::new("force_to_attitude_resolver".to_string(), vehicle_config);
         resolver.set_period_from_freq(100);

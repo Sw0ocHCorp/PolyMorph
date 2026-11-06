@@ -1,4 +1,4 @@
-<svg class="diagram" viewBox="0 0 700 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data flow: Gazebo sensors into the vehicle controller, which publishes the pose; the scenario player reads its simulated time and hands the setpoint pose down the pipe; the velocity stage adds the force, the resolver sets the attitude to reach, the attitude controller turns the setpoint into the wrench for the mixer; the mixer's commands go back to the vehicle controller and the actuators">
+<svg class="diagram" viewBox="0 0 700 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data flow: Gazebo sensors into the vehicle controller, which publishes the pose; the scenario player reads its simulated time and hands the setpoint pose down the pipe; the velocity stage reads the measured velocity in the pose and adds the force, the resolver sets the attitude to reach, the attitude controller turns the setpoint into the wrench for the mixer; the mixer's commands go back to the vehicle controller and the actuators">
   <defs>
     <marker id="p-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -29,7 +29,7 @@
   <text x="105" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">q_pref, v_d</text>
   <rect x="205" y="226" width="130" height="52" rx="6" fill="currentColor" fill-opacity="0.06" stroke="#8b7cd8" stroke-width="1.2"/>
   <text x="270" y="248" text-anchor="middle" font-size="11" font-weight="600">VelocityController</text>
-  <text x="270" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">+ f_d (a_d = 0)</text>
+  <text x="270" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">+ f_d (PI on v_d − v)</text>
   <rect x="370" y="226" width="130" height="52" rx="6" fill="currentColor" fill-opacity="0.06" stroke="#8b7cd8" stroke-width="1.2"/>
   <text x="435" y="248" text-anchor="middle" font-size="11" font-weight="600">Resolver</text>
   <text x="435" y="266" text-anchor="middle" font-size="9.5" opacity="0.75">q_d, ω_d (per scenario)</text>
@@ -39,6 +39,8 @@
   <text x="459" y="136" text-anchor="middle" font-size="9.5" fill="#4a90d9">wrench</text>
   <line x1="105" y1="184" x2="105" y2="220" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#p-arw)"/>
   <text x="113" y="206" font-size="9.5" opacity="0.75">Pose (time)</text>
+  <line x1="195" y1="184" x2="238" y2="220" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#p-arw)"/>
+  <text x="226" y="200" font-size="9.5" opacity="0.75">Pose (v)</text>
   <line x1="170" y1="252" x2="199" y2="252" stroke="#4a90d9" stroke-width="1.7" marker-end="url(#p-arw-b)"/>
   <line x1="335" y1="252" x2="364" y2="252" stroke="#4a90d9" stroke-width="1.7" marker-end="url(#p-arw-b)"/>
   <line x1="420" y1="226" x2="420" y2="190" stroke="#4a90d9" stroke-width="1.7" marker-end="url(#p-arw-b)"/>

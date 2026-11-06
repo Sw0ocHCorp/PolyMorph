@@ -171,6 +171,10 @@ impl PIDValue for Vec3 {
                             derivative.y * k_d, 
                             derivative.z * k_d);
     }
+
+    fn magnitude(&self) -> f64 {
+        return self.norm();
+    }
 }
 
 // Every arithmetic operator on Vec3 delegates to the wrapped Vector3, so the math lives in nalgebra

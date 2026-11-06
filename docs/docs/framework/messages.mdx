@@ -24,7 +24,7 @@ One message travels through the pipe from the mission to the attitude stage: a `
 | Field | Content | Frame / unit | Filled by | Read by |
 |---|---|---|---|---|
 | `orientation` | `q_pref` (mission), then `q_d` | body → world | mission, then resolver | resolver, attitude |
-| `l_velocity` | `v_d`, desired velocity | world, m/s | mission | velocity (brick 5) |
+| `l_velocity` | `v_d`, desired velocity; **optional**: without it the velocity loop does not run, and the stage adds the weight compensation alone (it does not abstain) | world, m/s | mission | velocity |
 | `imu_measurement.a_velocity` | `ω_d`, desired angular rate | body, rad/s | mission (zero), then resolver | attitude |
 | `force` | `f_d`, desired force, weight compensation included | **world**, N | velocity | resolver, attitude |
 

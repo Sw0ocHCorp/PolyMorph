@@ -31,6 +31,37 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 ## [Unreleased]
 
 ---
+### 2026-10-29 — Velocity loop implemented
+
+#### Added
+- `VelocityController`:
+  + the velocity loop: a PI on the velocity error, in the world frame, `a_d = kp·(v_d − v) + ki·∫(v_d − v)dt`, then the force `f_d = m·(a_d + g·ẑ)` handed to the next stage
+  + `new(...)` takes the time constant `τ_v` and the damping factor `ζ`; the gains are derived from them, never set by hand: `kp = 2ζ/τ_v`, `ki = 1/τ_v²`
+  + `set_receiver(...)`: the telemetry. The newest `PoseState` of the pass gives the measured velocity `v` (`l_velocity`, world frame), held between two poses
+  + the integral runs on the SIMULATED time between two measured poses (their time stamps), never on the wall clock of the scheduler: `dt = 0` on the first pose, without a time stamp, or when the simulator stalls (same pose again)
+  + the loop runs only when the setpoint carries `v_d` (`l_velocity`). Without it, `a_d = 0` and the PI is reset (stabilize: the weight compensation alone). Without a measured velocity yet, `a_d = 0` too: no regulation blind, the weight is still carried
+- `PIDController`:
+  + `compute_output(..., integrate)`: the caller decides, at each call, whether the integral may grow. Only the stage knows when its demand cannot be served
+  + `integral()`: reads the accumulated error
+  + `PIDValue::magnitude()`, implemented for `Vec3`: the size of an error, compared with the dead band
+- `main.rs`:
+  + connect the `VelocityController` in the motion control pipeline: it subscribes to the telemetry
+  + pass the `time_constant` && `damping_factor` to the `VelocityController` constructor: `τ_v = 2 s` (10 × `τ_attitude`), `ζ = 1`
+
+#### Changed
+- `PIDController`:
+  + `prev_error` is an `Option`: there is no previous error on the first call nor after `reset()`
+  + the integral grows only when `integrate` is true and `i ≠ 0`
+  + the dead band `min_correction_error` is applied: below it twice in a row, the output is zero and the integral is cleared
+
+#### Fixed
+- `OspraiController`:
+  + throw first odometry message to avoid processing wrong outlier data: its velocity differentiates the spawn pose against the world origin (6666 m/s in one recording). `l_velocity` stays `None` until the second message; the position and the time stamp are kept
+- `PIDController`:
+  + `dt = 0` no longer gives a NaN (the D term divided by zero)
+  + no more `println!` at every call (a blocking call, 100 times per second)
+
+
 ### 2026-10-24 — Share one motor tree between the stages; split motor description, measurement and command
 
 #### Added

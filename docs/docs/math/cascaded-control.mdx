@@ -162,7 +162,7 @@ An integral term corrects constant biases (wind, mis-estimated mass, thrust that
 
 > **A stateless term cannot wind up. Only a term that accumulates needs anti-windup.**
 
-The attitude loop, being stateless, needs none. The velocity loop will, and the right form is **conditional integration**: accumulate only when the mixer reports the demand is serviceable — information its residual already carries.
+The attitude loop, being stateless, needs none. The velocity loop will (brick 5b), and the right form is **conditional integration**: stop accumulating while the demand cannot be served **and** the error pushes further into the saturation; an error that pulls back out is still integrated. The PI takes that decision as an argument (`integrate`), because only the stage knows what the stages below can serve.
 
 ## Feedforward: compensate the known, feed back the unknown
 

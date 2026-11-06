@@ -11,7 +11,7 @@ The Gazebo test bench measures the stack against values **predicted before the r
 ## The bench
 
 - **Free flight.** The OSPRAI spawns **20 m** above the ground (`classic_env.sdf`) and Gazebo starts **paused**. In stabilize mode the thrust equals the weight and nothing commands a climb, so the vehicle cannot take off by itself; and a test on the ground with thrust = weight is ill-posed (see [the test rig](../pipelines/motor-control/validation.mdx#the-test-rig)). Starting in the air, paused, avoids both.
-- **Why so high.** At Play the rotors spin up from their minimum thrust, and the vehicle falls for a few tens of milliseconds. The vertical speed it picks up, about 0.5 m/s, is **never corrected**: stabilize mode holds the attitude and compensates the weight, nothing more. From 2 m the vehicle touched the ground after about 4 s, before the end of the step. From 20 m it flies for more than 30 s. The report checks the altitude anyway.
+- **Why so high.** At Play the rotors spin up from their minimum thrust, and the vehicle falls for a few tens of milliseconds. The vertical speed it picks up, about 0.5 m/s, is **never corrected**: stabilize mode holds the attitude and compensates the weight, nothing more. From 2 m the vehicle touched the ground after about 4 s, before the end of the step. From 20 m it flies for more than 30 s. The report checks the altitude anyway. In the velocity scenarios (S3, S4) the velocity loop does correct it.
 - **The clock.** Every pose is stamped with the **simulated time** (`header.stamp` of the Gazebo messages), never the wall clock. The scenario starts at the first simulated time the player sees, i.e. when you press Play.
 
 The chain, in the order of the main processes pipeline:
@@ -57,10 +57,14 @@ Without `--scenario`, the controller plays `hover`; without `--record`, nothing 
 | S0 | `hover` (default) | level, forever | tilt ≤ 0.5° from 1 s on |
 | S1 | `roll_step` | level from 0 to 3 s, roll +10° at 3 s, level again at 6 s, end at 9 s | the S0 tilt check on [1 s, 3 s]; the roll at the end of the hold (5.99 s); the two edges shown for information: fraction of the step covered at τ, 2τ, 3τ, and the overshoot |
 | S2 | `roll_refused` | the timeline of S1, **through the force → attitude resolver** | tilt ≤ 0.5° from 1 s to the end: the roll preference is refused |
+| S3 | `velocity_hold` | level, **`v_d = 0`** from Play on, end at 20 s, through the resolver | tilt ≤ 0.5° from 1 s to the end; speed ‖v‖ ≤ 0.05 m/s from 8 s to the end |
+| S4 | `velocity_step_y` | level, `v_d = 0`, then **`v_d = (0, 0.5, 0)` m/s** at 3 s, `0` again at 13 s, end at 24 s, through the resolver | the two edges of `v_y`: fraction of the step at τ_v, 2τ_v, 3τ_v within ± 5 points of the model, overshoot at most 5 points above it; speed ‖v‖ ≤ 0.05 m/s from 21 s to the end |
+
+S0, S1 and S2 give no `v_d`: the velocity loop does not run, and the velocity stage adds the weight compensation alone. Their predictions are unchanged by brick 5a.
 
 **One cascade per scenario.** The stages between the player and the attitude stage are a choice of the bench (`Scenario::cascade`), not of the control stack: any process may stand before the attitude stage, as long as it fills the fields that stage reads.
 - `AttitudeOnly`: player → velocity → attitude. The mission's attitude preference is tracked as it is. `hover` and `roll_step` test the attitude stage alone this way.
-- `WithResolver`: player → velocity → resolver → attitude. The attitude tracked is the one that makes the desired force producible, the closest to the preference.
+- `WithResolver`: player → velocity → resolver → attitude. The attitude tracked is the one that makes the desired force producible, the closest to the preference. The velocity scenarios need it: a lateral force only becomes producible once the vehicle rolls, and it is the resolver that decides that roll.
 
 **Why S2 must stay level.** The force is the weight, vertical, and the OSPRAI can only push in its body xz plane. Rolled by 10°, that plane no longer contains the vertical. So the resolver turns the preference back by −10° about x, the smallest rotation that makes the force producible: `q_d` stays level while the mission asks for 10° ([the resolver](../pipelines/motor-control/resolver.mdx)). A roll that **does** happen in S2 would mean the resolver is not in the cascade, or gets `S` wrong.
 
@@ -195,6 +199,54 @@ The yaw kick of an edge is the reaction torque of the rotors changing speed, abo
 
 **Open point.** The pitch keeps a steady error: −0.27° (body frame) during the hold, −0.14° level, the same on runs 2 and 3. Hypothesis, not verified: on a bicopter the common tilt of the arms produces both the force along x and the pitch moment, one actuator mode for two demands, and the least squares settle on a compromise. To be studied with the resolver.
 
+### The velocity scenarios (brick 5a)
+
+The tuning wired in `main.rs` is `τ_v = 2 s`, `ζ = 1`: `kp = 2ζ/τ_v = 1 /s`, `ki = 1/τ_v² = 0.25 /s²` ([the velocity loop](../pipelines/motor-control/roadmap.mdx#velocity-loop)). The textbook response of this PI to a velocity step is 100 % of the step at τ_v, 113.5 % at 2τ_v, 110 % at 3τ_v ([why it overshoots](../math/cascaded-control.mdx#explore-it)). On the OSPRAI it does not overshoot: see S4.
+
+**S3, `velocity_hold`.** At Play the rotors spin up from their minimum thrust and the vehicle sinks: −0.36 m/s at about 0.25 s in stabilize. With `v_d = 0` the loop brings the speed back.
+- Starting from −0.36 m/s at 0.25 s, the PI leaves 0.023 m/s at 8 s and 0.011 m/s at 10 s. The check, ‖v‖ ≤ 0.05 m/s from 8 s on, leaves room for the spin-up, which the model does not describe.
+- No lateral force is asked for: the tilt stays within the S0 bound.
+- **The altitude comes back to the spawn point** (information, read in `pz`; not judged). With `v_d = 0` the error is `−v`, so the integral `∫(v_d − v)dt` *is* the altitude lost since the first measured pose. The loop settles where that integral cancels the bias: the 0.1 % thrust surplus, `0.0098 m/s²`, needs `ki·∫ = −0.0098`, i.e. `∫ = −0.04 m`. The vehicle ends about **4 cm above** its first measured altitude, whatever the depth of the sink. A PI on the velocity holds the position it started from, as long as nothing freezes its integral.
+
+**S4, `velocity_step_y`.** A lateral step tests the whole chain: velocity → resolver → attitude → mixer.
+- The first pass asks for `a_d = kp·0.5 = 0.5 m/s²` along y. The resolver turns that force into a roll of about `−atan(0.5/9.81) = −2.9°` (a negative roll tilts the thrust towards +y). That is the largest roll of the step: as the speed builds up, the error shrinks.
+- **The vehicle holds less roll than the loop asks for.** While it slides, the drag acts on the rotors, `h` above the CoM: a moment `h·b·v` that pushes the roll back. The attitude law has no integrator, so it settles with a roll error proportional to the sliding speed, `τ²·h·b/I` = **1.26° per m/s** with the identified `h`, `b` and roll inertia `I` (1.41° per m/s measured after a roll step, see [a constant disturbing moment](../math/cascaded-control.mdx#a-constant-disturbing-moment-leaves-a-steady-error)). That missing roll is lateral force lost in proportion to `v`: **a second drag, 2.3 times the aerodynamic one**.
+- At 0.5 m/s the two drags together, 0.1122 N per m/s from the air and `m·g·τ²·h·b/I` = 0.259 N per m/s of lost roll, need `(0.1122 + 0.259)·0.5/1.2` ≈ 0.15 m/s² of lateral acceleration. The integral provides it by asking for about −0.9° of roll; the vehicle holds −0.27°, which balances the aerodynamic drag alone.
+- **So the step does not overshoot.** The extra drag over-damps the loop: the speed rises fast to about 95 % of the step, then creeps to the target while the integral builds up the missing roll. The textbook overshoot of 13.5 % needs a plant that only integrates the force.
+
+The predictions come from a model that adds to the textbook PI what the real chain has: one period of delay (the commands of a pass are applied at the next), the attitude loop seen as a lag of `τ = 0.2 s`, the drag `b = 0.1122 N per m/s` identified in free flight, and the roll the attitude loop loses against the drag moment. Every parameter was identified before the velocity loop existed.
+
+```bash
+python3 docs/scripts/velocity_step_reference.py                  # the model
+python3 docs/scripts/velocity_step_reference.py --drag-arm 0     # without the lost roll
+python3 docs/scripts/velocity_step_reference.py --ideal          # the textbook PI
+```
+
+| `velocity_step_y` | Model | Without the lost roll | Textbook PI | Check |
+|---|---|---|---|---|
+| edge 1 (0 → 0.5 m/s): fraction at τ_v / 2τ_v / 3τ_v | **95.3 / 96.0 / 97.4 %** | 105.9 / 110.6 / 105.2 % | 100.0 / 113.6 / 109.9 % | ± 5 points |
+| edge 1: overshoot | **0 %** | 13.9 % | 13.6 % | ≤ 5 % |
+| edge 2 (0.5 → 0 m/s): fraction at τ_v / 2τ_v / 3τ_v | **96.1 / 96.4 / 97.6 %** | 105.2 / 109.9 / 104.9 % | 99.0 / 112.7 / 109.4 % | ± 5 points |
+| edge 2: overshoot | **0 %** | 13.1 % | 12.7 % | ≤ 5 % |
+| speed ‖v‖ from 21 s to 24 s | 0.007 m/s | — | — | ≤ 0.05 m/s |
+
+The tolerance, 5 points: the measured roll error (1.41 instead of 1.26° per m/s) moves the fractions by about 1 point; the model leaves out the rotor lag, the roll → yaw → arms coupling and the vertical axis.
+
+**How the model was corrected.** The first predictions left out the lost roll (column "without the lost roll"). Run `velocity_step_y1` was stopped at 19 s, before the end of its 24 s, so it is invalid, but its two edges were complete, and they showed no overshoot at all: 94.7 / 95.7 / 97.1 % and 95.3 / 96.6 / 97.7 %. The effect was already documented, it was missing from the script. The corrected model uses only parameters identified before that run; nothing was fitted to it.
+
+**Runs `velocity_hold2` and `velocity_step_y3` (brick 5a)**, judged against predictions written before them:
+
+| Run | Measured | Predicted | Verdict |
+|---|---|---|---|
+| `velocity_hold2` | speed ≤ 0.027 m/s from 8 to 20 s; tilt ≤ 0.008°; altitude −34 cm at 2 s (start-up sink), then **+4.01 cm** from 20 s to 90 s | ≤ 0.05 m/s (0.023 at 8 s); ≤ 0.5°; **+4 cm** (information) | PASS |
+| `velocity_step_y3`, edge 1 | 94.7 / 95.8 / 97.2 %, no overshoot | 95.3 / 96.0 / 97.4 %, none | PASS |
+| `velocity_step_y3`, edge 2 | 95.3 / 96.5 / 97.7 %, no overshoot | 96.1 / 96.4 / 97.6 %, none | PASS |
+| `velocity_step_y3`, speed from 21 to 24 s | 0.007 m/s | 0.007 m/s | PASS |
+
+Shown for information: the roll peaks at −2.52° 0.76 s after edge 1 (the attitude loop smooths the −2.9° the first pass asks for), holds −0.28° at 0.49 m/s (predicted −0.27°, the aerodynamic drag alone), and peaks at +2.21° after edge 2. The vehicle travels 4.98 m along y.
+
+The altitude of S3 confirms that the integral of the velocity loop is the altitude lost: the loop recovers the whole start-up sink, then settles exactly where the integral cancels the thrust surplus.
+
 ## Reading the report
 
 The report separates two questions.
@@ -208,7 +260,8 @@ Only the **scripted part** of the scenario is judged, from Play to the end of it
 | simulated time per control update (mean) | 0.75 `T` to 1.25 `T` | the predictions assume one control update per period of **simulated** time. A control update is a pass that received a new pose. Over this range the predictions move by 1.2 points at most |
 | longest simulated gap between two updates | ≤ 2 `T` | at most one missed update in a row |
 | lowest altitude | ≥ 0.5 m | a ground contact is outside what the predictions model |
-| roll edges recorded | as many as the timeline has | the recording was stopped too early |
+| roll edges recorded, velocity edges recorded | as many as the timeline has (only for a scenario that judges such steps) | the recording was stopped too early |
+| end of the scenario recorded | the recording reaches the end of the timeline (only for a scenario with an end) | a recording stopped before the end would judge its check windows on part of them, or on nothing. Stop the controller only after the `finished` line |
 
 Two more lines are printed **for information only**: the real-time factor of Gazebo, and the share of passes that received no new pose. The latter is not a fault of the stack. Gazebo stalls for about 20 ms every 130 ms or so, most likely while it renders its sensors (lidar, cameras). During a stall the controller keeps running on the wall clock and repeats its pass on the same pose, but the **physics does not move**: in simulated time, nothing is delayed. That is why validity is judged on the simulated time between two control updates, and not on the ratio of fresh poses (88 % on a correct run).
 
@@ -245,7 +298,7 @@ A missing value is an **empty** field, never a zero (P3). A non-finite value is 
 
 ## Adding a scenario
 
-1. Add an arm to `scenarios::by_name` with its segments (`start_s`, `q_d`, `v_d`) and its checks, and add its name to `NAMES`.
+1. Add an arm to `scenarios::by_name` with its segments (`start_s`, `orientation` = `q_pref`, `velocity` = `v_d`, `None` when the velocity loop must not run) and its checks, and add its name to `NAMES`.
 2. **Compute the predictions before the first run**, and write in a comment where each number comes from.
 3. Add a row to the catalogue above.
 4. Check that the report fails on a known defect before trusting it to pass.
