@@ -20,7 +20,7 @@ use std::time::Duration;
 use prost_types::Timestamp;
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::{motion::motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}, pid_controller::PIDController}, core::scheduler::Process, messages::{pose_messages::Pose, registered_message::{AnyMessage, Vec3}}};
+use crate::{control::{motion::motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}, pid_controller::PIDController}, core::scheduler::Process, messages::{control_messages::VelocitySetpoint, registered_message::{AnyMessage, Vec3}}};
 
 /// The velocity stage: adds f_d (world, N) to the setpoint `Pose` coming down the pipe, and hands
 /// it on to the process registered right after it (the resolver).
@@ -85,10 +85,16 @@ impl Process for VelocityController {
             }
             self.last_velocity= Some(measured_velocity);
         }
+        //the setpoint to enrich; nothing came down the pipe (no mission setpoint yet): abstain [P3]
+        let Some(AnyMessage::PoseState(mut setpoint))= input.clone() else {
+            return None;
+        };
         //compute the output of the speed controller (real target speed) using the real dt, with the
         //last measured velocity (held when no new pose came: none before the first one)
-        let measurement= self.last_velocity.map(|velocity| AnyMessage::PoseState(Pose { l_velocity: Some(velocity), ..Default::default() }));
-        return self.compute_command_law(measurement, input.clone(), delta_time, false);
+        let f_d= self.compute_command_law(self.last_velocity, Some(VelocitySetpoint::from_pose(&setpoint)), delta_time, false);
+        //this stage's contribution to the setpoint; the rest goes on unchanged
+        setpoint.force= f_d;
+        return Some(AnyMessage::PoseState(setpoint));
     }
 
     /// The telemetry: the measured pose, whose `l_velocity` (world, m/s) is the measured velocity v.
@@ -115,18 +121,23 @@ impl Process for VelocityController {
 }
 
 impl MotionController for VelocityController {
+    /// v, the last measured velocity (world, m/s).
+    type Measurement= Vec3;
+    type Setpoint= VelocitySetpoint;
+    /// f_d, the force to produce (world, N).
+    type Command= Vec3;
+
     /// The law (its state is the PI's integral):
-    ///   1. the setpoint `Pose` of this pass (`setpoint`); none: abstain [P3]
+    ///   1. the setpoint of this pass (`setpoint`); none: abstain [P3]
     ///   2. a_d, m/s^2, world:
     ///        - no desired velocity v_d (stabilize): a_d = 0, and the PI starts again from zero;
     ///        - v_d but no measured velocity v yet: a_d = 0, no regulation blind;
     ///        - otherwise a_d = kp (v_d - v) + ki int(v_d - v), over `dt` of simulated time
     ///   3. f_d = m (a_d + g z)         N, world: the force producing a_d PLUS the weight compensation
-    ///   4. the setpoint, with `force` = f_d, every other field untouched
-    /// `input_data` carries the last measured velocity (`l_velocity`), `None` before the first one.
-    fn compute_command_law(&mut self, input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, dt: Duration, _verbose: bool) -> Option<AnyMessage> {
-        // Step 1. the setpoint to enrich; nothing came down the pipe (no mission setpoint yet): abstain
-        let Some(AnyMessage::PoseState(mut setpoint))= setpoint else {
+    /// `measurement` is the last measured velocity, `None` before the first one.
+    fn compute_command_law(&mut self, measurement: Option<Vec3>, setpoint: Option<VelocitySetpoint>, dt: Duration, _verbose: bool) -> Option<Vec3> {
+        // Step 1. no setpoint: abstain
+        let Some(setpoint)= setpoint else {
             return None;
         };
         // Step 2. the desired acceleration
@@ -134,13 +145,12 @@ impl MotionController for VelocityController {
         let mut a_d= Vec3::new(0.0, 0.0, 0.0);
         //IF the mission gives no desired velocity (stabilize): no regulation, and the integral is
         //cleared so the loop starts again from zero when a v_d comes back
-        if setpoint.l_velocity.is_none() {
+        if setpoint.v_d.is_none() {
             self.pid.reset();
         }
         //ELSE IF the velocity is measured: the PI on the velocity error (without a measurement, a_d
         //stays 0: the weight is still carried)
-        else if let Some(target_lin_vel)= setpoint.l_velocity && let Some(AnyMessage::PoseState(pose))= input_data
-                && let Some(lin_vel)= pose.l_velocity {
+        else if let Some(target_lin_vel)= setpoint.v_d && let Some(lin_vel)= measurement {
             a_d= self.pid.compute_output(lin_vel, target_lin_vel, dt, true);
         }
         // Step 3. the force that produces a_d, plus the one that cancels the weight: both in the
@@ -149,14 +159,7 @@ impl MotionController for VelocityController {
         let f_d= Vec3::new(self.vehicle_config.weight * a_d.x,
                            self.vehicle_config.weight * a_d.y,
                            self.vehicle_config.weight * (a_d.z + GRAVITY));
-        // Step 4. this stage's contribution to the setpoint; the rest goes on unchanged
-        setpoint.force= Some(f_d);
-        return Some(AnyMessage::PoseState(setpoint));
-    }
-
-    /// Not used: the desired velocity v_d comes down the pipe, inside the setpoint.
-    fn set_setpoint_receiver(&mut self, _receiver: Receiver<Pose>) {
-        println!("[WARNING::VelocityController] -> the setpoint comes through the pipe: receiver ignored");
+        return Some(f_d);
     }
 }
 
@@ -173,7 +176,7 @@ mod tests {
     use prost_types::Timestamp;
     use tokio::sync::broadcast::{channel, Sender};
 
-    use crate::messages::registered_message::UnitQuat;
+    use crate::messages::{pose_messages::Pose, registered_message::UnitQuat};
 
     use super::*;
 

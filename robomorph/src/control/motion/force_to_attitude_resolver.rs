@@ -24,7 +24,7 @@ use std::{f64::consts::FRAC_PI_2, sync::{Arc, OnceLock}, time::Duration};
 use nalgebra::{Unit, UnitQuaternion, Vector3};
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::motion::{motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}, motor_tree::{ForceSubspace, SharedMotorTree}}, core::scheduler::Process, messages::{pose_messages::Pose, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::motion::{motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}, motor_tree::{ForceSubspace, SharedMotorTree}}, core::scheduler::Process, messages::{control_messages::{AttitudeSetpoint, ForceSetpoint}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
 /// Below this fraction of the weight, the desired force has no usable direction: the last q_d is
 /// held. Free fall is never a valid demand for an aerial vehicle.
@@ -106,7 +106,15 @@ impl Process for ForceToAttitudeResolver {
     /// runs in every pass the resolver runs), its result handed to the next process through the pipe
     /// (or `None`: abstain, the attitude stage holds its last setpoint).
     fn exec(&mut self, input: &Option<AnyMessage>, dt: Duration) -> Option<AnyMessage> {
-        return self.compute_command_law(None, input.clone(), dt, false);
+        // 1. the setpoint of this pass; nothing came down the pipe: abstain
+        let Some(AnyMessage::PoseState(mut setpoint))= input.clone() else {
+            return None;
+        };
+        // 2. the law, on what it reads; it may abstain
+        let attitude_setpoint= self.compute_command_law(None, ForceSetpoint::from_pose(&setpoint), dt, false)?;
+        // 3. this stage's contribution to the setpoint; every other field goes on unchanged
+        attitude_setpoint.write_to(&mut setpoint);
+        return Some(AnyMessage::PoseState(setpoint));
     }
 
     /// Not used yet: the current attitude q only enters the forward / reverse choice of
@@ -134,29 +142,31 @@ impl Process for ForceToAttitudeResolver {
 }
 
 impl MotionController for ForceToAttitudeResolver {
+    /// No measurement yet: the current attitude q only enters the forward / reverse choice of
+    /// bidirectional thrusters (ground vehicles, not implemented).
+    type Measurement= ();
+    type Setpoint= ForceSetpoint;
+    type Command= AttitudeSetpoint;
+
     /// The law:
-    ///   1. the setpoint `Pose` of this pass (`setpoint`); none: abstain [P3]
-    ///   2. it must carry f_d (`force`) and q_pref (`orientation`), and S must be known (the motor
-    ///      tree is configured, with at least one thruster); otherwise abstain [P3]
+    ///   1. the setpoint of this pass must carry f_d and q_pref; otherwise abstain [P3]
+    ///   2. S must be known (the motor tree is configured, with at least one thruster); otherwise
+    ///      abstain [P3]
     ///   3. f_d without a usable direction (|f_d| < MIN_FORCE_FRACTION m g, or not finite): hold the
     ///      last valid q_d (abstain if there is none yet)
     ///   4. otherwise q_d = align(q_pref, f_d, S), kept as the last valid one
-    ///   5. the setpoint goes on with `orientation` = q_d, omega_d = 0 in `imu_measurement`, and
-    ///      `force` unchanged
-    fn compute_command_law(&mut self, _input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, _dt: Duration, _verbose: bool) -> Option<AnyMessage> {
-        // Step 1. the setpoint of this pass; nothing came down the pipe: abstain
-        let Some(AnyMessage::PoseState(mut setpoint))= setpoint else {
+    ///   5. the setpoint of the attitude stage: q_d, omega_d = 0, and f_d unchanged
+    fn compute_command_law(&mut self, _measurement: Option<()>, setpoint: Option<ForceSetpoint>, _dt: Duration, _verbose: bool) -> Option<AttitudeSetpoint> {
+        // Step 1. what the resolver reads
+        let Some(setpoint)= setpoint else {
             return None;
         };
-        // Step 2. what the resolver reads, and the vehicle it resolves for
-        let (Some(force), Some(orientation))= (setpoint.force, setpoint.orientation) else {
-            return None;
-        };
+        // Step 2. the vehicle it resolves for
         let Some(subspace)= self.tree.get().map(|tree| tree.force_subspace()).filter(|s| **s != ForceSubspace::Empty) else {
             return None;
         };
-        let f_d= Vector3::from(force);
-        let q_pref= UnitQuaternion::from(orientation);
+        let f_d= Vector3::from(setpoint.force);
+        let q_pref= UnitQuaternion::from(setpoint.orientation);
         // Step 3. a force with no usable direction: the last valid attitude is held
         let q_d= if !f_d.iter().all(|c| c.is_finite()) || f_d.norm() < MIN_FORCE_FRACTION * self.vehicle_config.weight * GRAVITY {
             self.last_q_d?
@@ -166,17 +176,8 @@ impl MotionController for ForceToAttitudeResolver {
             self.last_q_d= Some(q_d);
             q_d
         };
-        // Step 5. this stage's contribution to the setpoint; the force goes on unchanged
-        setpoint.orientation= Some(UnitQuat::from(q_d));
-        let mut rates= setpoint.imu_measurement.unwrap_or_default();
-        rates.a_velocity= Some(Vec3::new(0.0, 0.0, 0.0));
-        setpoint.imu_measurement= Some(rates);
-        return Some(AnyMessage::PoseState(setpoint));
-    }
-
-    /// Not used: the preference comes down the pipe, inside the setpoint.
-    fn set_setpoint_receiver(&mut self, _receiver: Receiver<Pose>) {
-        println!("[WARNING::ForceToAttitudeResolver] -> the setpoint comes through the pipe: receiver ignored");
+        // Step 5. the setpoint of the attitude stage; the force goes on unchanged
+        return Some(AttitudeSetpoint { orientation: UnitQuat::from(q_d), a_velocity: Vec3::new(0.0, 0.0, 0.0), force: setpoint.force });
     }
 }
 
@@ -188,7 +189,7 @@ impl MotionController for ForceToAttitudeResolver {
 mod tests {
     use nalgebra::Matrix3;
 
-    use crate::control::motion::motor_tree::test_trees::{holonomic, osprai, quadrotor};
+    use crate::{control::motion::motor_tree::test_trees::{holonomic, osprai, quadrotor}, messages::pose_messages::Pose};
 
     use super::*;
 

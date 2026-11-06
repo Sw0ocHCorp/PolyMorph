@@ -26,6 +26,8 @@ The stage between the velocity loop and the attitude loop. It answers one questi
 | **Output** | the same `Pose`, handed on through the pipe: `orientation` ← `q_d`, `imu_measurement.a_velocity` ← `ω_d` (zero in v1); `force` passed through unchanged (world, N) |
 | **State** | the last valid alignment direction (guard against `‖f_d‖ → 0`) and, for bidirectional thrusters, the last forward/reverse choice (hysteresis). Nothing else. |
 
+In the code, `exec` builds a `ForceSetpoint` (`f_d`, `q_pref`) from the `Pose`. The law returns an `AttitudeSetpoint` (`q_d`, `ω_d`, `f_d`), which `exec` writes back into that `Pose`.
+
 `f_d` is **not** consumed here: it travels down to the attitude stage, which rotates it into the body frame with `q⁻¹` and hands it to the mixer inside the wrench. While the vehicle is not yet aligned, the mixer serves the reachable projection of that force and leaves the rest in its residual — the transient sag this causes is corrected by the attitude loop within `τ`, and by the velocity loop's integrator for whatever remains.
 
 ## The degree-of-freedom budget

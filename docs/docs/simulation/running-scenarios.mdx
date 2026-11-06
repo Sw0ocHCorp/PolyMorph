@@ -247,6 +247,8 @@ Shown for information: the roll peaks at −2.52° 0.76 s after edge 1 (the atti
 
 The altitude of S3 confirms that the integral of the velocity loop is the altitude lost: the loop recovers the whole start-up sink, then settles exactly where the integral cancels the thrust surplus.
 
+**Runs `roll_step5` and `velocity_step_y4` reproduce them.** The laws now receive [exact types](../framework/messages.mdx#the-inputs-and-outputs-of-the-laws) instead of whole messages, and the behaviour must not change, and it did not: held roll 6.39°, velocity fractions 94.7 / 95.7 / 97.2 % and 95.3 / 96.6 / 97.7 %, no overshoot, 0.007 m/s from 21 to 24 s.
+
 ## Reading the report
 
 The report separates two questions.

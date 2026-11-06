@@ -31,6 +31,48 @@ An entry written in the very commit it describes cannot quote its own hash, sinc
 ## [Unreleased]
 
 ---
+### 2026-11-06 — Give each control law exact input and output types
+
+#### Added
+- `control_messages.rs`:
+    what each control law reads and produces, instead of whole messages. Internal types, never on the wire, not variants of `AnyMessage`
+  + `VelocitySetpoint`: `v_d`, optional inside the setpoint: no `v_d` means stabilize, no setpoint means abstain
+  + `ForceSetpoint`: `f_d` and `q_pref`
+  + `AttitudeSetpoint`: `q_d`, `ω_d` and `f_d`. `write_to(...)` writes them into a `Pose` and leaves its other fields untouched
+  + `AttitudeState`: `q` and `ω`
+  + `from_pose(...)`: returns `None` as soon as a required field is missing, so that the law abstains [P3]
+- Tests:
+  + each `from_pose(...)` with a required field missing, `write_to(...)` keeps the other fields of the `Pose`
+
+
+#### Changed
+- `MotionController`:
+  + each stage declares what its law measures, aims for and produces: `type Measurement`, `type Setpoint`, `type Command`. `compute_command_law(...)` works on these types instead of `AnyMessage`
+- `exec(...)` does the integration into the framework (reads the channels, holds what must survive a pass, converts between the `Pose` and the types of the law); `compute_command_law(...)` only keeps the theory:
+  + `VelocityController`: `Vec3` (`v`), `VelocitySetpoint` -> `Vec3` (`f_d`). The law no longer receives a `Pose` built around the measured velocity
+  + `ForceToAttitudeResolver`: `ForceSetpoint` -> `AttitudeSetpoint`
+  + `AttitudeController`: `AttitudeState`, `AttitudeSetpoint` -> `WorkVec`. The held setpoint is an `Option<AttitudeSetpoint>`, and the nested `if let` of the law are gone
+  + `MotorsMixer`: `WorkVec` -> `Vec<MotorCommand>`
+- Docs: `framework/messages.mdx` (new section "The inputs and outputs of the laws"), `framework/paradigm.mdx`, `framework/overview.mdx`, `pipelines/motor-control/overview.mdx`, `attitude-controller.mdx`, `resolver.mdx`, `mixer.mdx`, `running-scenarios.mdx` (the regression runs)
+
+
+#### Removed
+- `MotionController::set_setpoint_receiver(...)`: no caller, and the four implementations only printed a warning
+
+
+#### Fixed
+- Docs:
+  + `framework/messages.mdx` said the attitude setpoint's `a_velocity` was not consumed yet
+  + `framework/conventions.mdx` said the pipe was only used from the attitude stage to the mixer
+
+
+#### Validation
+- The behavior must not change, and it did not:
+  + the tests of the velocity stage and of the resolver go through `exec`: only an import line changed
+  + the characterisation of the mixer stays identical to the bit
+- Regression: `roll_step5` (held roll 6.39°) and `velocity_step_y4` (fractions 94.7 / 95.7 / 97.2 % and 95.3 / 96.6 / 97.7 %, no overshoot, 0.007 m/s from 21 s to 24 s): PASS
+
+
 ### 2026-11-06 — Add the velocity scenarios to the test bench; fix the report's gap check
 
 #### Added

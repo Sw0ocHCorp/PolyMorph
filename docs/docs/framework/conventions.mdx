@@ -45,7 +45,7 @@ From the control point of view, equal frequencies are healthy: the cascade's tim
 
 | Mechanism | Guarantee | Used for |
 |---|---|---|
-| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass, from a process to the one registered right after it (`None` if that one did not run) | attitude → mixer |
+| **Pipe** (`Process::exec` return value) | delivered **only** within the same pass, from a process to the one registered right after it (`None` if that one did not run) | the whole cascade: mission → velocity → resolver → attitude → mixer |
 | **broadcast channel** (tokio) | asynchronous, non-blocking, bounded capacity, `Lagged` when a receiver falls behind | telemetry, motor feedback, commands |
 
 A `Lagged` error means *"messages were skipped, carry on"*. Treating it as a termination condition kills the consumer silently.

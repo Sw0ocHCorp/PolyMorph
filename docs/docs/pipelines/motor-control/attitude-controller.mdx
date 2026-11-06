@@ -12,6 +12,8 @@ File: `robomorph/src/control/motion/attitude_controller.rs`. It holds a desired 
 | **Tunings** | `τ` (s); `ζ` = 1 |
 | **Vehicle data** | the diagonal of `I` (`moments_matrix`). The mass enters upstream, in `f_d` |
 
+In the code, `exec` builds an `AttitudeState` (`q`, `ω`) and an `AttitudeSetpoint` (`q_d`, `ω_d`, `f_d`) from these `Pose`s. The law works on them and returns a `WorkVec`, which `exec` wraps in `VehicleWrench`.
+
 ## The algorithm, cycle by cycle
 
 ```

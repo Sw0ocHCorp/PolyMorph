@@ -10,7 +10,7 @@ use std::{ops::Neg, time::Duration};
 use nalgebra::{UnitQuaternion, Vector3};
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::{motion::motion_controller::{MotionController, VehicleKinematicConfig}, pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::WorkVec, pose_messages::Pose, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::{motion::motion_controller::{MotionController, VehicleKinematicConfig}, pid_controller::PIDController}, core::scheduler::Process, messages::{control_messages::{AttitudeSetpoint, AttitudeState}, motor_messages::WorkVec, pose_messages::Pose, registered_message::{AnyMessage, UnitQuat, Vec3}}};
 
 
 
@@ -39,13 +39,13 @@ pub struct AttitudeController {
     damping_factor: f64,
     /// Last setpoint received, HELD between two updates (zero-order hold): the stage above may run
     /// slower than this one, or abstain. The measurement, on the contrary, is never held for computing.
-    setpoint: Pose,
+    setpoint: Option<AttitudeSetpoint>,
 
 }
 
 impl AttitudeController {
-    /// `time_constant` = tau (s), `damping_factor` = zeta. The initial setpoint is
-    /// `Pose::default()`, every field `None`: the law abstains until a real setpoint arrives.
+    /// `time_constant` = tau (s), `damping_factor` = zeta. There is no setpoint at first: the law
+    /// abstains until a real one arrives.
     pub fn new(name: String, veh_config: VehicleKinematicConfig, time_constant: f64, damping_factor: f64) -> Self {
         return Self{name, 
                     vehicle_config: veh_config,
@@ -54,7 +54,7 @@ impl AttitudeController {
                     period: Duration::from_millis(0),
                     time_constant: time_constant,
                     damping_factor,
-                    setpoint: Pose::default()
+                    setpoint: None
                 }
     }
 
@@ -88,12 +88,13 @@ impl Process for AttitudeController {
             }
         }
         // The setpoint of THIS pass, from the process registered right before this stage (pipe, its
-        // single source). Nothing in the pipe (that process abstained): the previous one is held.
+        // single source). Nothing in the pipe (that process abstained): the previous one is held. A
+        // pose missing one of the fields this stage reads leaves no setpoint: the law abstains.
         if let Some(AnyMessage::PoseState(setpoint))= input {
-            self.setpoint= setpoint.clone();
+            self.setpoint= AttitudeSetpoint::from_pose(setpoint);
         }
-        let wrench_setpoint= self.compute_command_law(Some(AnyMessage::PoseState(current_pose)), 
-                                                            Some(AnyMessage::PoseState(self.setpoint.clone())), dt, false);
+        let wrench_setpoint= self.compute_command_law(AttitudeState::from_pose(&current_pose), self.setpoint, dt, false)
+                                                            .map(AnyMessage::VehicleWrench);
         if let Some(setpoint)= wrench_setpoint {
             if let Some(wrench_sender)= &mut self.wrench_sender && 
                         wrench_sender.receiver_count() > 0{
@@ -130,6 +131,10 @@ impl Process for AttitudeController {
 }
 
 impl MotionController for AttitudeController {
+    type Measurement= AttitudeState;
+    type Setpoint= AttitudeSetpoint;
+    type Command= WorkVec;
+
     /// The attitude law, stateless (same inputs -> same outputs):
     ///   1. q, q_d -> UnitQuaternion (renormalises the wire quaternion; mandatory before inverting)
     ///   2. q_err = q^-1 (x) q_d                 error expressed in the BODY frame
@@ -139,98 +144,77 @@ impl MotionController for AttitudeController {
     ///   6. M_k = I_k alpha_k                                                N.m, per axis
     ///   7. f_body = q^-1 f_d                                                the setpoint force, body
     ///   8. return [f_body ; M]
-    /// `setpoint` is an `AnyMessage::PoseState`: q_d = `orientation`, omega_d =
-    /// `imu_measurement.a_velocity`, f_d = `force`. Returns `None` when any required field is missing
-    /// (measurement q or omega; setpoint q_d, omega_d or f_d): ABSTAIN, never a zero wrench [P3]. `dt` is not needed by this law (no integrator, no numerical derivative).
-    fn compute_command_law(&mut self, input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, dt: std::time::Duration, verbose: bool) -> Option<AnyMessage> {
-        //compute the command law ONLY if the attitude controller receive the current pose
-        //and the setpoint to reach
-        //but also IF the input and setpoint contains the required data struct
-        //  current quaternion orientation, current imu measurements(for gyro) and the setpoint quaternion orientation
-        if let Some(pose_state) = input_data && let AnyMessage::PoseState(current_pose)= pose_state {
-            if verbose {
-                println!("Input pose:\n{:?}", current_pose);
-            }
-            if let Some(setpoint_data) = setpoint && let AnyMessage::PoseState(pose_setpoint)= setpoint_data {
-                if verbose {
-                    println!("Setpoint pose:\n{:?}", pose_setpoint);
-                }
-                if let Some(current_orientation)= current_pose.orientation && 
-                        let Some(current_imu)= current_pose.imu_measurement && let Some(current_angular_vel)= current_imu.a_velocity &&
-                            let Some(orientation_setpoint)= pose_setpoint.orientation &&
-                                let Some(angular_vel_setpoint)= pose_setpoint.imu_measurement.and_then(|imu| imu.a_velocity) &&
-                                    let Some(force_setpoint)= pose_setpoint.force {
-                    //apply inverse on current orientation because current orientation if the orientation of the vehicle in the world frame
-                    //so body frame => world frame
-                    //and the inverse represent orientation in body frame
-                    //so world frame => body frame
-                    //the attitude controller will send a setpoint wrench relative to the current wrench of the vehicle
-                    //so the orientation needs to be express in the body frame
-                    // Step 2. q^-1 on the LEFT: the error is expressed in the current body frame - the frame
-                    // of the gyro and of the mixer's moments. (q_d * q^-1 would express it in the world.)
-                    let mut error_body= UnitQuaternion::from(current_orientation).inverse() * UnitQuaternion::from(orientation_setpoint);
-                    // Step 3. q and -q are the same rotation; w < 0 means the encoded angle exceeds 180 deg
-                    // (the long way round). Taking the other representative keeps theta in [0, pi].
-                    if error_body.w < 0.0 {
-                        error_body= UnitQuaternion::from(UnitQuat{w: -error_body.w, x: -error_body.i, 
-                                                                        y: -error_body.j, z: -error_body.k});
-                    }
-                    let error_body_vec= error_body.vector();
-                    if verbose {
-                        println!("Attitude Error in body frame: {:?}", error_body);
-                        println!("Attitude Error in body frame (vector part): {:?}", error_body_vec.into_owned());
-                    }
-                    // Step 4. theta = 2 atan2(|v|, w): (w, |v|) = (cos(theta/2), sin(theta/2)) is a point on the unit
-                    // circle. atan2 rather than acos(w): acos has an infinite slope near 1, i.e. at equilibrium.
-                    let remaining_rotation= 2.0*f64::atan2(error_body_vec.norm(), error_body.w);
-                    // e_R = theta * e, the rotation vector (rad), in the BODY frame despite the variable name.
-                    // NOTE: the division by |v| is evaluated before the guard below (0/0 = NaN at equilibrium);
-                    // that is harmless ONLY because the guard tests |v| itself, never the (possibly NaN) result.
-                    let mut error_world= (remaining_rotation / error_body_vec.norm()) * error_body_vec;
-                    // Small-angle branch: v = e sin(theta/2) ~ e theta/2, so theta e ~ 2 v. Not optional: the
-                    // controller lives at equilibrium, where |v| -> 0. The threshold value is not sensitive.
-                    let eps= 1e-6;
-                    if error_body_vec.norm() <= eps {
-                        error_world= 2.0 * error_body_vec;
-                    }
-                    // Step 5. Two proportional feedbacks on the two components of the rotational state
-                    // (angle error, angular-rate error). The rate error uses the MEASURED gyro: no numerical
-                    // derivative anywhere. omega_d comes from the resolver (zero while it does not
-                    // differentiate q_d). Gains identical on the three axes.
-                    let angular_accel= 1.0 / f64::powf(self.time_constant, 2.0) * error_world + 
-                                                                            (2.0*self.damping_factor / self.time_constant) * (Vector3::from(angular_vel_setpoint) - Vector3::from(current_angular_vel));
-                    // Step 7. The force to PRODUCE, f_d, given in the WORLD frame (it includes the weight
-                    // compensation, (0, 0, +m g) in stabilize), translated into body coordinates by q^-1.
-                    // When the vehicle is tilted the part of it the vehicle cannot produce (the lateral
-                    // component, for an under-actuated vehicle) stays in the mixer residual: expected, not
-                    // to be "fixed" here.
-                    let force_vec= UnitQuaternion::from(current_orientation).inverse() * Vector3::from(force_setpoint);
-                    // Step 6. M = I * alpha: the inertia matrix (diagonal in practice) turns the desired angular
-                    // acceleration into moments. This is where the vehicle enters the law, and why (tau, zeta)
-                    // are portable between vehicles.
-                    let result_wrench= WorkVec::new_from_vec3(Vec3::from(force_vec), 
-                                                                        Vec3::from(self.vehicle_config.moments_matrix * angular_accel));
-                    if verbose {
-                        println!("[AttitudeController:INFO] -> Resulting Vehicle Wrench:\n{:?}", result_wrench);
-                    }
-                    return Some(AnyMessage::VehicleWrench(result_wrench));
-                }
-            } 
-        }
+    /// Returns `None` when the measurement (q, omega) or the setpoint (q_d, omega_d, f_d) is missing:
+    /// ABSTAIN, never a zero wrench [P3]. `dt` is not needed by this law (no integrator, no numerical derivative).
+    fn compute_command_law(&mut self, measurement: Option<AttitudeState>, setpoint: Option<AttitudeSetpoint>, dt: std::time::Duration, verbose: bool) -> Option<WorkVec> {
         // Missing measurement or setpoint: abstain. A zero wrench here would be an active
         // "cut everything" command, executed faithfully by the mixer (it once made the rotors
         // alternate between hover thrust and minimum at the loop rate).
         // verbose only: at start-up (no pose yet, Gazebo paused) this would print at every pass
+        let (Some(measurement), Some(setpoint))= (measurement, setpoint) else {
+            if verbose {
+                println!("[AttitudeController:WARNING] -> Wrong data passed to Attitude controller");
+            }
+            return None;
+        };
         if verbose {
-            println!("[AttitudeController:WARNING] -> Wrong data passed to Attitude controller");
+            println!("Measured state:\n{:?}", measurement);
+            println!("Setpoint:\n{:?}", setpoint);
         }
-        return None;
-    }
-
-    /// Not used: the setpoint comes from the resolver through the pipe, and only from there. A second
-    /// source would overwrite it at every tick.
-    fn set_setpoint_receiver(&mut self, _receiver: Receiver<Pose>) {
-        println!("[WARNING::AttitudeController] -> the setpoint comes from the resolver through the pipe: receiver ignored");
+        //apply inverse on current orientation because current orientation if the orientation of the vehicle in the world frame
+        //so body frame => world frame
+        //and the inverse represent orientation in body frame
+        //so world frame => body frame
+        //the attitude controller will send a setpoint wrench relative to the current wrench of the vehicle
+        //so the orientation needs to be express in the body frame
+        // Step 2. q^-1 on the LEFT: the error is expressed in the current body frame - the frame
+        // of the gyro and of the mixer's moments. (q_d * q^-1 would express it in the world.)
+        let mut error_body= UnitQuaternion::from(measurement.orientation).inverse() * UnitQuaternion::from(setpoint.orientation);
+        // Step 3. q and -q are the same rotation; w < 0 means the encoded angle exceeds 180 deg
+        // (the long way round). Taking the other representative keeps theta in [0, pi].
+        if error_body.w < 0.0 {
+            error_body= UnitQuaternion::from(UnitQuat{w: -error_body.w, x: -error_body.i,
+                                                            y: -error_body.j, z: -error_body.k});
+        }
+        let error_body_vec= error_body.vector();
+        if verbose {
+            println!("Attitude Error in body frame: {:?}", error_body);
+            println!("Attitude Error in body frame (vector part): {:?}", error_body_vec.into_owned());
+        }
+        // Step 4. theta = 2 atan2(|v|, w): (w, |v|) = (cos(theta/2), sin(theta/2)) is a point on the unit
+        // circle. atan2 rather than acos(w): acos has an infinite slope near 1, i.e. at equilibrium.
+        let remaining_rotation= 2.0*f64::atan2(error_body_vec.norm(), error_body.w);
+        // e_R = theta * e, the rotation vector (rad), in the BODY frame despite the variable name.
+        // NOTE: the division by |v| is evaluated before the guard below (0/0 = NaN at equilibrium);
+        // that is harmless ONLY because the guard tests |v| itself, never the (possibly NaN) result.
+        let mut error_world= (remaining_rotation / error_body_vec.norm()) * error_body_vec;
+        // Small-angle branch: v = e sin(theta/2) ~ e theta/2, so theta e ~ 2 v. Not optional: the
+        // controller lives at equilibrium, where |v| -> 0. The threshold value is not sensitive.
+        let eps= 1e-6;
+        if error_body_vec.norm() <= eps {
+            error_world= 2.0 * error_body_vec;
+        }
+        // Step 5. Two proportional feedbacks on the two components of the rotational state
+        // (angle error, angular-rate error). The rate error uses the MEASURED gyro: no numerical
+        // derivative anywhere. omega_d comes from the resolver (zero while it does not
+        // differentiate q_d). Gains identical on the three axes.
+        let angular_accel= 1.0 / f64::powf(self.time_constant, 2.0) * error_world +
+                                                                (2.0*self.damping_factor / self.time_constant) * (Vector3::from(setpoint.a_velocity) - Vector3::from(measurement.a_velocity));
+        // Step 7. The force to PRODUCE, f_d, given in the WORLD frame (it includes the weight
+        // compensation, (0, 0, +m g) in stabilize), translated into body coordinates by q^-1.
+        // When the vehicle is tilted the part of it the vehicle cannot produce (the lateral
+        // component, for an under-actuated vehicle) stays in the mixer residual: expected, not
+        // to be "fixed" here.
+        let force_vec= UnitQuaternion::from(measurement.orientation).inverse() * Vector3::from(setpoint.force);
+        // Step 6. M = I * alpha: the inertia matrix (diagonal in practice) turns the desired angular
+        // acceleration into moments. This is where the vehicle enters the law, and why (tau, zeta)
+        // are portable between vehicles.
+        let result_wrench= WorkVec::new_from_vec3(Vec3::from(force_vec),
+                                                            Vec3::from(self.vehicle_config.moments_matrix * angular_accel));
+        if verbose {
+            println!("[AttitudeController:INFO] -> Resulting Vehicle Wrench:\n{:?}", result_wrench);
+        }
+        return Some(result_wrench);
     }
 }
 
@@ -257,18 +241,19 @@ mod tests {
         return AttitudeController::new("attitude".to_string(), vehicle_config, 0.2, 1.0);
     }
 
-    /// A pose: attitude q and angular rate omega; and, for a setpoint, the force f_d (world).
-    fn pose(q: UnitQuaternion<f64>, omega: Vec3, force: Option<Vec3>) -> AnyMessage {
-        let mut pose= Pose::default();
-        pose.orientation= Some(UnitQuat::from(q));
-        pose.imu_measurement= Some(IMUMeasurements { timestamp: None, l_accel: None, a_velocity: Some(omega), magnetic_field: None });
-        pose.force= force;
-        return AnyMessage::PoseState(pose);
+    /// The measured state: attitude q and gyro omega.
+    fn state(q: UnitQuaternion<f64>, omega: Vec3) -> AttitudeState {
+        return AttitudeState { orientation: UnitQuat::from(q), a_velocity: omega };
+    }
+
+    /// The setpoint: attitude q_d, angular rate omega_d and force f_d (world).
+    fn setpoint(q_d: UnitQuaternion<f64>, omega_d: Vec3, force: Vec3) -> AttitudeSetpoint {
+        return AttitudeSetpoint { orientation: UnitQuat::from(q_d), a_velocity: omega_d, force };
     }
 
     /// The wrench of one law evaluation; a missing wrench fails the test.
-    fn wrench(measured: AnyMessage, setpoint: AnyMessage) -> WorkVec {
-        let Some(AnyMessage::VehicleWrench(wrench))= controller().compute_command_law(Some(measured), Some(setpoint), Duration::from_millis(10), false) else {
+    fn wrench(measured: AttitudeState, setpoint: AttitudeSetpoint) -> WorkVec {
+        let Some(wrench)= controller().compute_command_law(Some(measured), Some(setpoint), Duration::from_millis(10), false) else {
             panic!("no wrench produced");
         };
         return wrench;
@@ -279,7 +264,7 @@ mod tests {
         // 1. yawed by 90 deg about z, on target (q = q_d, no rate): no moment at all
         let yawed= UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 90f64.to_radians());
         let zero= Vec3::new(0.0, 0.0, 0.0);
-        let w= wrench(pose(yawed, zero, None), pose(yawed, zero, Some(Vec3::new(1.0, 0.0, 11.772))));
+        let w= wrench(state(yawed, zero), setpoint(yawed, zero, Vec3::new(1.0, 0.0, 11.772)));
         // 2. f_body = q^-1 f_d: the world x axis is the body -y axis once yawed by +90 deg, so
         //    (1, 0, 11.772) world reads (0, -1, 11.772) in the body frame
         assert!(w.fx.abs() < 1e-12 && (w.fy + 1.0).abs() < 1e-12 && (w.fz - 11.772).abs() < 1e-12, "{:?}", w);
@@ -290,7 +275,7 @@ mod tests {
     fn the_rate_setpoint_enters_the_damping_term() {
         // 1. level, on target, at rest, but asked to roll at omega_d = 0.5 rad/s
         let level= UnitQuaternion::identity();
-        let w= wrench(pose(level, Vec3::new(0.0, 0.0, 0.0), None), pose(level, Vec3::new(0.5, 0.0, 0.0), Some(Vec3::new(0.0, 0.0, 11.772))));
+        let w= wrench(state(level, Vec3::new(0.0, 0.0, 0.0)), setpoint(level, Vec3::new(0.5, 0.0, 0.0), Vec3::new(0.0, 0.0, 11.772)));
         // 2. alpha_x = (2 zeta / tau) (omega_d - omega) = (2 / 0.2) * 0.5 = 5 rad/s^2, so
         //    M_x = I_xx alpha_x = 0.017 * 5 = 0.085 N.m; nothing on the other axes
         assert!((w.mx - 0.085).abs() < 1e-12, "{:?}", w);
@@ -303,7 +288,8 @@ mod tests {
         // "cut the rotors" command)
         let level= UnitQuaternion::identity();
         let zero= Vec3::new(0.0, 0.0, 0.0);
-        let result= controller().compute_command_law(Some(pose(level, zero, None)), Some(pose(level, zero, None)), Duration::from_millis(10), false);
+        let no_force= Pose { orientation: Some(UnitQuat::from(level)), imu_measurement: Some(IMUMeasurements { a_velocity: Some(zero), ..Default::default() }), ..Default::default() };
+        let result= controller().compute_command_law(Some(state(level, zero)), AttitudeSetpoint::from_pose(&no_force), Duration::from_millis(10), false);
         assert!(result.is_none());
     }
 }

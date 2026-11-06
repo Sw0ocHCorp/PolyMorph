@@ -8,9 +8,8 @@ use std::{collections::HashMap, fmt::{Display, Formatter}, iter::Map, sync::mpsc
 
 use nalgebra::{DVector, Matrix3, Matrix6xX, Quaternion, Rotation3, UnitQuaternion, UnitVector3, Vector3, Vector6};
 use prost_derive::Message;
-use tokio::sync::broadcast::Receiver;
 
-use crate::{control::{pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::{Pose, Transform}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::{pid_controller::PIDController}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorCommandType, MotorFeedBack, MotorModel, WorkVec, WorkingAxis}, pose_messages::Transform, registered_message::{UnitQuat, Vec3}}};
 
 /// Standard gravity (m/s^2). Multiplied by `VehicleKinematicConfig::weight` it gives the
 /// weight compensation `m * g` that the velocity stage puts into the desired force f_d.
@@ -19,27 +18,30 @@ pub const GRAVITY: f64= 9.81;
 /// A stage of the control cascade: something that turns (measurement, setpoint) into the
 /// setpoint of the stage below it. Every stage is also a scheduled `Process`.
 ///
-/// Two implementors exist today, with a strict interface contract between them:
-///   - `AttitudeController`: (pose, pose setpoint)  ->  `AnyMessage::VehicleWrench`
-///   - `MotorsMixer`:        (motor feedbacks, wrench setpoint) -> `AnyMessage::MotorCommands`
+/// `exec` (the `Process` side) does the integration into the framework: it reads the channels, holds
+/// what must survive a pass, and converts between the messages and the types below. The law only
+/// sees what it reads and what it produces (`messages::control_messages`):
+///   - `VelocityController`:      (v, `VelocitySetpoint`)                 -> f_d
+///   - `ForceToAttitudeResolver`: (nothing, `ForceSetpoint`)              -> `AttitudeSetpoint`
+///   - `AttitudeController`:      (`AttitudeState`, `AttitudeSetpoint`)   -> `WorkVec`
+///   - `MotorsMixer`:             (nothing, `WorkVec`)                    -> `Vec<MotorCommand>`
 /// The 6D wrench is the pivot of the whole chain: the mixer does not know what commands it,
 /// the attitude stage does not know which vehicle executes it.
 pub trait MotionController : Process {
+    /// What the law measures; `()` for a law that reads no measurement through this argument.
+    type Measurement;
+    /// What the law aims for.
+    type Setpoint;
+    /// What the law produces for the stage below.
+    type Command;
 
-    /// The pure control law of the stage: consumes a measurement (`input_data`) and a setpoint,
-    /// returns the setpoint of the next stage, or `None` when it cannot compute (missing data).
+    /// The pure control law of the stage: consumes a measurement and a setpoint, returns the
+    /// setpoint of the next stage, or `None` when it cannot compute (missing data).
     /// `None` means ABSTAIN: the consumer keeps its last setpoint. It must never be replaced by
     /// a zero-valued message, which would be an active "cut everything" command.
     /// `dt` is the period of the stage; `verbose` enables the per-cycle prints (costly: a
     /// `println!` is a blocking call inside the period budget).
-    fn compute_command_law(&mut self, input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, dt: Duration, verbose: bool) -> Option<AnyMessage>;
-
-    /// Asynchronous setpoint input (broadcast channel), alternative to the scheduler pipe.
-    fn set_setpoint_receiver(&mut self, receiver: Receiver<Pose>);
-
-    //fn update_setpoint(&mut self, setpoint: AnyMessage):
-
-
+    fn compute_command_law(&mut self, measurement: Option<Self::Measurement>, setpoint: Option<Self::Setpoint>, dt: Duration, verbose: bool) -> Option<Self::Command>;
 }
 
 /// Plain read-only description of the vehicle. Every field is a scalar or a `Copy` type,

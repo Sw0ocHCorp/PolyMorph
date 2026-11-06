@@ -23,6 +23,8 @@ All the processes run in the **same processes pipeline at 100 Hz**, registered i
 | [Mixer](mixer.mdx) | motor feedbacks (efforts) | wrench | one command per motor | body → per-motor |
 | [Vehicle controller](../../simulation/gazebo.mdx) | — | motor efforts | actuator units | hardware |
 
+Each law receives only these fields, as its own types: `exec` builds them from the `Pose` and writes the result back. See [the inputs and outputs of the laws](../../framework/messages.mdx#the-inputs-and-outputs-of-the-laws).
+
 The **wrench** is the contract that makes each side replaceable: the mixer does not know what commands it, the attitude stage does not know which vehicle executes it.
 
 ## What exists and what does not

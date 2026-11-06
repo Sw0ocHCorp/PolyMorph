@@ -14,7 +14,7 @@ use nalgebra::{DVector, Matrix6xX, Vector6};
 use prost_types::Timestamp;
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{control::motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_tree::{MotorTree, SharedMotorTree}}, core::scheduler::Process, messages::{motor_messages::{MotorFeedBack, MotorState, WorkVec}, pose_messages::{Pose, Transform}, registered_message::AnyMessage}};
+use crate::{control::motion::{motion_controller::{MotionController, VehicleKinematicConfig}, motor_tree::{MotorTree, SharedMotorTree}}, core::scheduler::Process, messages::{motor_messages::{MotorCommand, MotorFeedBack, MotorState, WorkVec}, pose_messages::Transform, registered_message::AnyMessage}};
 
 /// The control-allocation stage: turns one 6D wrench setpoint into one command per motor.
 ///
@@ -65,7 +65,7 @@ impl Process for MotorsMixer {
             self.setpoint= *setpoint_msg;
         }
         //compute the motor commands using the motor controllers and the setpoint from previous process or asynchronous receiver
-        let motor_cmds= self.compute_command_law(None, Some(AnyMessage::VehicleWrench(self.setpoint.clone())), dt, false);
+        let motor_cmds= self.compute_command_law(None, Some(self.setpoint), dt, false).map(AnyMessage::MotorCommands);
         if let Some(cmds)= motor_cmds {
             if let Some(cmd_sender)= &mut self.cmd_sender && cmd_sender.receiver_count() > 0{
                 let _= cmd_sender.send(cmds);
@@ -220,6 +220,11 @@ impl Process for MotorsMixer {
 // =============================================================================
 
 impl MotionController for MotorsMixer {
+    /// No measurement through this argument: the law reads the motor states the stage keeps.
+    type Measurement= ();
+    type Setpoint= WorkVec;
+    type Command= Vec<MotorCommand>;
+
     // Compute the commands to apply to the motors to reach the setpoint
     // based on their geometries, positions, and the forces they produces.
     // the goal is to apply the motors commands that produce the exact wrenches, for each motors that allow to reach the setpoint
@@ -240,7 +245,7 @@ impl MotionController for MotorsMixer {
     //      STEP#3:
     //          Build the control effectiveness matrix(solver) to get the motor commands to apply 
     //          
-    fn compute_command_law(&mut self, _input_data: Option<AnyMessage>, setpoint: Option<AnyMessage>, dt: Duration, verbose: bool)  -> Option<AnyMessage> {
+    fn compute_command_law(&mut self, _measurement: Option<()>, setpoint: Option<WorkVec>, dt: Duration, verbose: bool)  -> Option<Vec<MotorCommand>> {
         // `verbose` prints the solver's internals (dozens of lines per pass): a debugging aid only.
         // In flight it stays false (see `exec`): printing at every pass loads the machine and adds
         // jitter to the control loop.
@@ -250,10 +255,7 @@ impl MotionController for MotorsMixer {
             return None;
         };
         let mut motors_commands= Vec::new();
-        let mut setpoint_wrench= self.setpoint;
-        if let Some(msg) = setpoint && let AnyMessage::VehicleWrench(setpoint_msg)= msg {
-            setpoint_wrench= setpoint_msg;
-        }
+        let setpoint_wrench= setpoint.unwrap_or(self.setpoint);
         if verbose {
             println!("[INFO] -> Setpoint wrench= {:?}", setpoint_wrench);
         }
@@ -466,11 +468,7 @@ impl MotionController for MotorsMixer {
                 motors_commands.push(command);
             }
         } 
-        return Some(AnyMessage::MotorCommands(motors_commands));
-    }
-    
-    fn set_setpoint_receiver(&mut self, _receiver: Receiver<Pose>) {
-        println!("[MotorsMixer:INFO] -> this Controller don't receive any external setpoints")
+        return Some(motors_commands);
     }
 }
 
@@ -554,7 +552,7 @@ mod tests {
         let mut mixer= osprai_mixer([0.02, -0.01], [5.886, 5.886]);
         // 2. a body-frame wrench with a little of every axis
         let wrench= WorkVec { fx: 0.3, fy: 0.0, fz: 11.9, mx: 0.05, my: -0.01, mz: -0.02 };
-        let Some(AnyMessage::MotorCommands(commands))= mixer.compute_command_law(None, Some(AnyMessage::VehicleWrench(wrench)), Duration::from_millis(10), false) else {
+        let Some(commands)= mixer.compute_command_law(None, Some(wrench), Duration::from_millis(10), false) else {
             panic!("no command computed");
         };
         // 3. one command per motor, parents first, each value identical to the bit

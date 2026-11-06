@@ -100,6 +100,8 @@ Planned compensation, **generic**: computed on the motor tree for every joint th
 - **State**: one `MotorState` per motor (its latest feedback, the command just emitted) and **the last setpoint** — held when nothing new arrives.
 - **Output**: `AnyMessage::MotorCommands` on the command channel.
 
+In the code, the law receives the wrench as a `WorkVec` and returns a `Vec<MotorCommand>`, which `exec` wraps in `MotorCommands`.
+
 ## OSPRAI-specific validation oracle
 
 An exact closed-form geometric inversion exists for this airframe: take the in-plane components of each rotor's force as the unknowns, then convert to polar form (thrust, angle). It is a useful cross-check for the numerical solver, but it does not generalise to arbitrary kinematic trees — which is the whole point of the generic allocator.

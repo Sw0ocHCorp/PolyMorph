@@ -39,7 +39,7 @@ There is no vehicle flag and no per-family subclass. What a vehicle can do is *d
 
 **Why.** A zero is not "nothing": it is an active command, executed faithfully. A zero wrench published on ticks without fresh telemetry once made the rotors alternate between hover thrust and minimum at the loop rate.
 
-**Where.** [Lessons learned](../pipelines/motor-control/lessons.mdx), `MotionController::compute_command_law`.
+**Where.** [Lessons learned](../pipelines/motor-control/lessons.mdx), `MotionController::compute_command_law`, and the `from_pose` constructors of [the laws' inputs](messages.mdx#the-inputs-and-outputs-of-the-laws), which return `None` as soon as a required field is missing.
 
 ### P4 — One processes pipeline, one clock
 
@@ -111,7 +111,7 @@ One line per rule, to go through on every change:
 | Check | Rule |
 |---|---|
 | No vehicle name, flag or `if vehicle == …` in `robomorph`; vehicle facts come from the motor tree or `VehicleKinematicConfig` | P1 |
-| A new stage consumes and produces the contracts in place (wrench, pose, force…) and does not reach across them | P2 |
+| A new stage consumes and produces the contracts in place (wrench, pose, force…) and does not reach across them; its law declares exactly what it reads and produces (`Measurement`, `Setpoint`, `Command`) | P2 |
 | Every "cannot compute" path returns `None`; no `Default::default()` message is published | P3 |
 | A new process is registered in the same processes pipeline as its producer and consumer, after its producer; per-cycle prints are behind `verbose` | P4 |
 | New gains are expressed as `(τ, ζ)` or derived from them; `m` and `I` are applied last | P5 |

@@ -2,7 +2,8 @@
 //!
 //! * `messages`: the message catalogue (`AnyMessage`, wire tags, `Vec3` / `UnitQuat`) and the
 //!   protobuf structs exchanged between processes and with the hardware (`Pose`, IMU / GNSS /
-//!   lidar samples, `MotorModel`, `MotorFeedBack`, `MotorCommand`, `MotorState`, `WorkVec`).
+//!   lidar samples, `MotorModel`, `MotorFeedBack`, `MotorCommand`, `MotorState`, `WorkVec`), and
+//!   the inputs and outputs of the control laws (`control_messages`).
 //! * `core`: the scheduler (`Process`, `ProcessesPipeline`, `Scheduler`) that runs the processes at
 //!   their period and hands each output to the next process through the pipe.
 //! * `communications`: the `HardwareInterface` trait, the wire codec and the UDP implementation.
@@ -46,7 +47,7 @@ use chrono::Utc;
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use prost_types::Timestamp;
 
-use crate::{control::motion::{attitude_controller::AttitudeController, motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}}, core::scheduler::Process, messages::{pose_messages::{IMUMeasurements, Pose}, registered_message::{AnyMessage, UnitQuat, Vec3}}};
+use crate::{control::motion::{attitude_controller::AttitudeController, motion_controller::{GRAVITY, MotionController, VehicleKinematicConfig}}, core::scheduler::Process, messages::{control_messages::{AttitudeSetpoint, AttitudeState}, pose_messages::{IMUMeasurements, Pose}, registered_message::{UnitQuat, Vec3}}};
 
 use super::*;
 
@@ -85,11 +86,11 @@ use super::*;
         pose_setpoint.force= Some(Vec3::new(0.0, 0.0, vehicle_config.weight * GRAVITY));
         println!("Vehicle Moments Matrix:\n{:?}", vehicle_config.moments_matrix);
         println!("Time Constant:\n{:?}", att_controller.get_time_constant());
-        let result= att_controller.compute_command_law(Some(AnyMessage::PoseState(input_pose.clone())), 
-                                                                    Some(AnyMessage::PoseState(pose_setpoint.clone())), 
+        let result= att_controller.compute_command_law(AttitudeState::from_pose(&input_pose),
+                                                                    AttitudeSetpoint::from_pose(&pose_setpoint),
                                                                     Duration::from_millis(20), false);
         // the law must produce a wrench: an abstention (None) fails the test instead of skipping it
-        let Some(AnyMessage::VehicleWrench(wrench))= result else {
+        let Some(wrench)= result else {
             panic!("case 1: no wrench produced");
         };
         // case 1: identity
@@ -102,10 +103,10 @@ use super::*;
                                                             magnetic_field: None });
         println!("Vehicle Moments Matrix:\n{:?}", vehicle_config.moments_matrix);
         println!("Time Constant:\n{:?}", att_controller.get_time_constant());
-        let result= att_controller.compute_command_law(Some(AnyMessage::PoseState(input_pose.clone())), 
-                                                                    Some(AnyMessage::PoseState(pose_setpoint.clone())), 
+        let result= att_controller.compute_command_law(AttitudeState::from_pose(&input_pose),
+                                                                    AttitudeSetpoint::from_pose(&pose_setpoint),
                                                                     Duration::from_millis(20), false);
-        let Some(AnyMessage::VehicleWrench(wrench))= result else {
+        let Some(wrench)= result else {
             panic!("case 2: no wrench produced");
         };
         // case 2: rotated by 30 rad about body x

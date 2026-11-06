@@ -30,6 +30,29 @@ One message travels through the pipe from the mission to the attitude stage: a `
 
 A stage **abstains** (`None`) when a field it reads is missing [P3]; the next stage then holds its last setpoint. In a measured state, `force` is `None`: it is a setpoint field only.
 
+### The inputs and outputs of the laws
+
+The `Pose` goes down the pipe, but a control law does not receive it. `exec` does the integration into the framework: it reads the channels, holds what must survive a pass, and builds from the `Pose` only what the law reads. `compute_command_law` works on these exact types, declared by each stage in the `MotionController` trait, and `exec` writes the result back into the `Pose` it hands on.
+
+| Stage | `Measurement` | `Setpoint` | `Command` |
+|---|---|---|---|
+| `VelocityController` | `Vec3`: `v`, world, m/s | `VelocitySetpoint` | `Vec3`: `f_d`, world, N |
+| `ForceToAttitudeResolver` | `()` | `ForceSetpoint` | `AttitudeSetpoint` |
+| `AttitudeController` | `AttitudeState` | `AttitudeSetpoint` | `WorkVec` |
+| `MotorsMixer` | `()`: it reads the motor states it keeps | `WorkVec` | `Vec<MotorCommand>` |
+
+The structs live in `robomorph/src/messages/control_messages.rs`. Like `WorkVec`, they are internal: not protobuf messages, never on the wire, and not variants of `AnyMessage`.
+
+| Struct | Fields | Read in the `Pose` |
+|---|---|---|
+| `VelocitySetpoint` | `v_d: Option<Vec3>`, world, m/s | `l_velocity` |
+| `ForceSetpoint` | `force: Vec3` (`f_d`, world, N), `orientation: UnitQuat` (`q_pref`) | `force`, `orientation` |
+| `AttitudeSetpoint` | `orientation: UnitQuat` (`q_d`), `a_velocity: Vec3` (`ω_d`, body, rad/s), `force: Vec3` (`f_d`, world, N) | `orientation`, `imu_measurement.a_velocity`, `force` |
+| `AttitudeState` | `orientation: UnitQuat` (`q`), `a_velocity: Vec3` (`ω`, body, rad/s) | `orientation`, `imu_measurement.a_velocity` |
+
+- **P3 in one place.** `from_pose` returns `None` as soon as a required field is missing, and the law then abstains. `VelocitySetpoint::from_pose` is the exception: it always exists, because `v_d` is optional inside a setpoint. No `v_d` means stabilize, no setpoint means abstain.
+- **`AttitudeSetpoint::write_to`** writes the resolver's result into the `Pose`, and leaves its other fields untouched.
+
 ### Wire format
 
 <figure>
@@ -60,7 +83,7 @@ The aggregated vehicle state. Fields used by control:
 | `gnss_measurement` | lat / lon / alt | world |
 | `l_velocity` | **estimated** linear velocity (not a raw measurement) | — |
 
-The **same** struct is used as the attitude controller's **setpoint**, where only `orientation` (the desired attitude `q_d`) is read. The desired angular rate is implicitly zero in the current implementation, so the setpoint's `a_velocity` is not consumed yet.
+The **same** struct is the setpoint that goes down the cascade: see [the setpoint `Pose`](#the-setpoint-pose-down-the-cascade).
 
 `Transform` (`location`, `orientation`) is a motor's *resolved* pose in the body frame, computed by `MotorTree::transforms`. It is internal and never serialised.
 
